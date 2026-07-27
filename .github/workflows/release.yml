@@ -330,6 +330,10 @@ jobs:
           done
 
   update-latest-json:
+    # Disabled in this fork: this job pushes to master, rewrites the website
+    # update manifest (website/latest.json), and triggers a herdr.dev deploy —
+    # none of which apply to a personal fork.
+    if: ${{ false }}
     needs: release
     runs-on: ubuntu-latest
     permissions:
