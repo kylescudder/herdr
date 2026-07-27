@@ -544,6 +544,7 @@ impl App {
             request_open_existing_worktree: None,
             request_new_workspace_cwd: None,
             request_remove_linked_worktree: None,
+            request_move_workspace: None,
             request_submit_worktree_create: false,
             request_submit_worktree_open: false,
             request_submit_worktree_remove: false,
@@ -556,6 +557,7 @@ impl App {
             rename_pane_target: None,
             worktree_create: None,
             worktree_open: None,
+            worktree_move: None,
             worktree_remove: None,
             worktree_directory,
             collapsed_space_keys,
@@ -1007,6 +1009,11 @@ impl App {
 
             if let Some(ws_idx) = self.state.request_remove_linked_worktree.take() {
                 self.open_remove_linked_worktree_confirmation(ws_idx);
+                needs_render = true;
+            }
+
+            if let Some(ws_idx) = self.state.request_move_workspace.take() {
+                self.open_move_workspace_picker(ws_idx);
                 needs_render = true;
             }
 
@@ -1760,6 +1767,9 @@ impl App {
             }
             Mode::ConfirmRemoveWorktree => {
                 self.handle_worktree_remove_key(key_event);
+            }
+            Mode::MoveWorktreeToWorkspace => {
+                self.handle_move_workspace_key(key_event);
             }
             Mode::Resize => {
                 self.handle_resize_key_via_api(key);
@@ -5593,6 +5603,7 @@ last_pane = "prefix+tab"
             checkout_path: "/repo/herdr-generated-branch".into(),
             error: None,
             creating: false,
+            target: Default::default(),
         });
 
         app.route_client_events(

@@ -315,6 +315,7 @@ pub struct Keybinds {
     pub settings: ActionKeybinds,
     pub new_workspace: ActionKeybinds,
     pub new_worktree: ActionKeybinds,
+    pub move_worktree: ActionKeybinds,
     pub open_worktree: ActionKeybinds,
     pub remove_worktree: ActionKeybinds,
     pub rename_workspace: ActionKeybinds,
@@ -477,6 +478,7 @@ impl Config {
             settings: empty_action!(),
             new_workspace: empty_action!(),
             new_worktree: empty_action!(),
+            move_worktree: empty_action!(),
             open_worktree: empty_action!(),
             remove_worktree: empty_action!(),
             rename_workspace: empty_action!(),
@@ -599,6 +601,7 @@ impl Config {
             apply_action!(keybinds.settings, settings, source);
             apply_action!(keybinds.new_workspace, new_workspace, source);
             apply_action!(keybinds.new_worktree, new_worktree, source);
+            apply_action!(keybinds.move_worktree, move_worktree, source);
             apply_action!(keybinds.open_worktree, open_worktree, source);
             apply_action!(keybinds.remove_worktree, remove_worktree, source);
             apply_action!(keybinds.rename_workspace, rename_workspace, source);

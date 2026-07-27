@@ -27,29 +27,16 @@ impl App {
         let Some(ws) = self.state.workspaces.get(ws_idx) else {
             return Err("Workspace not found.".into());
         };
+        // A linked worktree is a valid source: worktree actions resolve against its
+        // shared repo root (`membership.repo_root`), so the picker lists every
+        // worktree of the same repo just as it would from the repo-root workspace.
         let existing_membership = ws.worktree_space().cloned();
-        if existing_membership
-            .as_ref()
-            .is_some_and(|membership| membership.is_linked_worktree)
-        {
-            return Err(
-                "New and open worktree actions start from the repo parent workspace.".into(),
-            );
-        }
 
         let git_space = ws.git_space().cloned().or_else(|| {
             ws.resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)
                 .as_deref()
                 .and_then(crate::workspace::git_space_metadata)
         });
-        if git_space
-            .as_ref()
-            .is_some_and(|metadata| metadata.is_linked_worktree)
-        {
-            return Err(
-                "New and open worktree actions start from the repo parent workspace.".into(),
-            );
-        }
 
         let space = existing_membership
             .as_ref()
@@ -76,6 +63,49 @@ impl App {
             source_checkout_path,
             source_workspace_id,
         ))
+    }
+
+    /// Build the "workspace" dropdown for the New/Open Worktree dialogs: options
+    /// are "top level" plus every top-level workspace, defaulting to the group the
+    /// focused workspace belongs to (itself if it is top-level, else its parent).
+    pub(crate) fn build_worktree_target_selector(
+        &self,
+        focused_ws_idx: usize,
+    ) -> crate::app::state::WorktreeTargetSelector {
+        let mut options = vec![crate::app::state::WorktreeMoveTarget {
+            target_id: None,
+            label: "top level".into(),
+        }];
+        for ws in self.state.workspaces.iter() {
+            // Only top-level workspaces are valid filing targets (keeps the sidebar
+            // two levels deep, matching the move-to-workspace picker).
+            if crate::ui::workspace_parent_index(&self.state, ws).is_some() {
+                continue;
+            }
+            options.push(crate::app::state::WorktreeMoveTarget {
+                target_id: Some(ws.id.clone()),
+                label: ws.display_name(),
+            });
+        }
+        let default_target_id = self.state.workspaces.get(focused_ws_idx).and_then(|ws| {
+            if ws
+                .worktree_space()
+                .is_some_and(|space| space.is_linked_worktree)
+            {
+                ws.parent_workspace_id.clone()
+            } else {
+                Some(ws.id.clone())
+            }
+        });
+        let selected = options
+            .iter()
+            .position(|option| option.target_id == default_target_id)
+            .unwrap_or(0);
+        crate::app::state::WorktreeTargetSelector {
+            options,
+            selected,
+            expanded: false,
+        }
     }
 
     pub(crate) fn open_new_linked_worktree_dialog(&mut self, ws_idx: usize) {
@@ -107,6 +137,7 @@ impl App {
             checkout_path = %checkout_path.display(),
             "opening worktree dialog"
         );
+        let target = self.build_worktree_target_selector(ws_idx);
         self.state.selected = ws_idx;
         self.state.name_input = branch.clone();
         self.state.name_input_replace_on_type = true;
@@ -121,6 +152,7 @@ impl App {
             checkout_path,
             error: None,
             creating: false,
+            target,
         });
         self.state.mode = Mode::NewLinkedWorktree;
     }
@@ -217,6 +249,7 @@ impl App {
             return;
         }
 
+        let target = self.build_worktree_target_selector(ws_idx);
         self.state.selected = ws_idx;
         self.state.worktree_open = Some(WorktreeOpenState {
             source_workspace_id,
@@ -230,12 +263,100 @@ impl App {
             query: String::new(),
             search_focused: false,
             error: None,
+            target,
         });
         self.state.mode = Mode::OpenExistingWorktree;
     }
 
-    pub(crate) fn handle_worktree_create_key(&mut self, key: KeyEvent) {
+    pub(crate) fn open_move_workspace_picker(&mut self, ws_idx: usize) {
+        let Some(ws) = self.state.workspaces.get(ws_idx) else {
+            return;
+        };
+        let workspace_id = ws.id.clone();
+        let current_parent = ws.parent_workspace_id.clone();
+        // Destinations: "top level" plus every OTHER top-level workspace. Only
+        // top-level workspaces are valid parents (keeps the sidebar 2 levels).
+        let mut entries = vec![crate::app::state::WorktreeMoveTarget {
+            target_id: None,
+            label: "top level".into(),
+        }];
+        for (idx, other) in self.state.workspaces.iter().enumerate() {
+            if idx == ws_idx || crate::ui::workspace_parent_index(&self.state, other).is_some() {
+                continue;
+            }
+            entries.push(crate::app::state::WorktreeMoveTarget {
+                target_id: Some(other.id.clone()),
+                label: other.display_name(),
+            });
+        }
+        let selected = entries
+            .iter()
+            .position(|entry| entry.target_id == current_parent)
+            .unwrap_or(0);
+        self.state.selected = ws_idx;
+        self.state.worktree_move = Some(crate::app::state::WorktreeMoveState {
+            workspace_id,
+            entries,
+            selected,
+            error: None,
+        });
+        self.state.mode = Mode::MoveWorktreeToWorkspace;
+    }
+
+    pub(crate) fn handle_move_workspace_key(&mut self, key: KeyEvent) {
         match key.code {
+            KeyCode::Esc => self.close_move_workspace_picker(),
+            KeyCode::Up => {
+                if let Some(move_state) = self.state.worktree_move.as_mut() {
+                    move_state.selected = move_state.selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(move_state) = self.state.worktree_move.as_mut() {
+                    if move_state.selected + 1 < move_state.entries.len() {
+                        move_state.selected += 1;
+                    }
+                }
+            }
+            KeyCode::Enter => self.submit_move_workspace(),
+            _ => {}
+        }
+    }
+
+    fn close_move_workspace_picker(&mut self) {
+        self.state.cancel_move_workspace();
+    }
+
+    pub(crate) fn submit_move_workspace(&mut self) {
+        self.state.apply_move_workspace();
+        self.render_dirty.store(true, Ordering::Release);
+        self.render_notify.notify_one();
+    }
+
+    pub(crate) fn handle_worktree_create_key(&mut self, key: KeyEvent) {
+        // While the workspace dropdown is open, keys drive it.
+        if self
+            .state
+            .worktree_create
+            .as_ref()
+            .is_some_and(|create| create.target.expanded)
+        {
+            if let Some(create) = &mut self.state.worktree_create {
+                match key.code {
+                    KeyCode::Up => create.target.select_up(),
+                    KeyCode::Down => create.target.select_down(),
+                    KeyCode::Enter | KeyCode::Esc => create.target.expanded = false,
+                    _ => {}
+                }
+            }
+            return;
+        }
+        match key.code {
+            KeyCode::Tab => {
+                if let Some(create) = &mut self.state.worktree_create {
+                    create.target.expanded = true;
+                }
+            }
             KeyCode::Esc => {
                 if self
                     .state
@@ -274,7 +395,29 @@ impl App {
     }
 
     pub(crate) fn handle_worktree_open_key(&mut self, key: KeyEvent) {
+        // While the workspace dropdown is open, keys drive it.
+        if self
+            .state
+            .worktree_open
+            .as_ref()
+            .is_some_and(|open| open.target.expanded)
+        {
+            if let Some(open) = &mut self.state.worktree_open {
+                match key.code {
+                    KeyCode::Up => open.target.select_up(),
+                    KeyCode::Down => open.target.select_down(),
+                    KeyCode::Enter | KeyCode::Esc => open.target.expanded = false,
+                    _ => {}
+                }
+            }
+            return;
+        }
         match key.code {
+            KeyCode::Tab => {
+                if let Some(open) = &mut self.state.worktree_open {
+                    open.target.expanded = true;
+                }
+            }
             KeyCode::Esc => {
                 self.state.worktree_open = None;
                 self.state.mode = if self.state.active.is_some() {
@@ -426,6 +569,7 @@ impl App {
                     query: String::new(),
                     search_focused: false,
                     error: Some(format!("failed to open worktree: {err}")),
+                    target: Default::default(),
                 });
                 self.state.mode = Mode::OpenExistingWorktree;
             }
@@ -589,6 +733,7 @@ impl App {
         create.error = None;
         let workspace_id = create.source_workspace_id.clone();
         let checkout_path = create.checkout_path.display().to_string();
+        let target_workspace_id = create.target.selected_target_id();
 
         let immediate_response = self.runtime_worktree_create_deferred(
             "tui.worktree.create",
@@ -600,6 +745,8 @@ impl App {
                 base: Some("HEAD".into()),
                 focus: true,
                 label: None,
+                target_workspace_id,
+                target_workspace_specified: true,
             },
         );
         if let Some(message) = immediate_api_error_message(immediate_response.as_deref()) {
@@ -719,6 +866,7 @@ impl App {
             return;
         };
         let source_workspace_id = open.source_workspace_id.clone();
+        let target_workspace_id = open.target.selected_target_id();
 
         let response = self.runtime_worktree_open(
             "tui.worktree.open",
@@ -729,6 +877,8 @@ impl App {
                 branch: None,
                 focus: true,
                 label: None,
+                target_workspace_id,
+                target_workspace_specified: true,
             },
         );
         if serde_json::from_str::<crate::api::schema::SuccessResponse>(&response).is_ok() {
@@ -1068,6 +1218,177 @@ mod tests {
         panic!("timed out waiting for worktree event");
     }
 
+    #[test]
+    fn move_workspace_picker_reassigns_parent_and_offers_top_level_destinations() {
+        let mut app = app_for_worktree_tests();
+        // Two top-level workspaces plus a loose worktree workspace to move.
+        let odyssey = crate::workspace::Workspace::test_new("odyssey");
+        let bifrost = crate::workspace::Workspace::test_new("bifrost");
+        let worktree = crate::workspace::Workspace::test_new("feature-wt");
+        let bifrost_id = bifrost.id.clone();
+        let worktree_id = worktree.id.clone();
+        app.state.workspaces = vec![odyssey, bifrost, worktree];
+
+        // Open the picker for the worktree (index 2).
+        app.open_move_workspace_picker(2);
+        assert_eq!(
+            app.state.mode,
+            crate::app::state::Mode::MoveWorktreeToWorkspace
+        );
+        let move_state = app.state.worktree_move.as_ref().expect("picker open");
+        // Destinations: "top level" first, then the two other top-level workspaces
+        // (never the workspace being moved).
+        let labels: Vec<&str> = move_state
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
+        assert_eq!(labels, vec!["top level", "odyssey", "bifrost"]);
+
+        // Select "bifrost" and submit.
+        let bifrost_pos = move_state
+            .entries
+            .iter()
+            .position(|entry| entry.target_id.as_deref() == Some(bifrost_id.as_str()))
+            .expect("bifrost is a destination");
+        app.state
+            .worktree_move
+            .as_mut()
+            .expect("picker open")
+            .selected = bifrost_pos;
+        app.submit_move_workspace();
+
+        // The worktree is now filed under Bifrost and the picker is closed.
+        let moved = app
+            .state
+            .workspaces
+            .iter()
+            .find(|ws| ws.id == worktree_id)
+            .expect("worktree still present");
+        assert_eq!(
+            moved.parent_workspace_id.as_deref(),
+            Some(bifrost_id.as_str())
+        );
+        assert!(app.state.worktree_move.is_none());
+        assert_ne!(
+            app.state.mode,
+            crate::app::state::Mode::MoveWorktreeToWorkspace
+        );
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[test]
+    fn move_picker_offers_sibling_top_level_repro_mass_scripter() {
+        // Repro of Kyle's report: moving `mass-scripter_test` should offer
+        // `mass-scripter` (a sibling top-level) and exclude itself. Both are
+        // plain top-level workspaces (no herdr worktree_space), like the live
+        // session, even though on disk one is a git worktree of the other.
+        let mut app = app_for_worktree_tests();
+        let mass_scripter = crate::workspace::Workspace::test_new("mass-scripter");
+        let mass_scripter_test = crate::workspace::Workspace::test_new("mass-scripter_test");
+        let ms_id = mass_scripter.id.clone();
+        app.state.workspaces = vec![mass_scripter, mass_scripter_test];
+
+        // Move `mass-scripter_test` (index 1).
+        app.open_move_workspace_picker(1);
+        let move_state = app.state.worktree_move.as_ref().expect("picker open");
+        let labels: Vec<&str> = move_state
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
+        // Expect self excluded, sibling offered.
+        assert_eq!(labels, vec!["top level", "mass-scripter"]);
+        assert!(
+            move_state
+                .entries
+                .iter()
+                .any(|entry| entry.target_id.as_deref() == Some(ms_id.as_str())),
+            "mass-scripter must be a valid destination"
+        );
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[test]
+    fn move_workspace_picker_to_top_level_clears_parent() {
+        let mut app = app_for_worktree_tests();
+        let odyssey = crate::workspace::Workspace::test_new("odyssey");
+        let odyssey_id = odyssey.id.clone();
+        let mut worktree = crate::workspace::Workspace::test_new("feature-wt");
+        worktree.parent_workspace_id = Some(odyssey_id.clone());
+        let worktree_id = worktree.id.clone();
+        app.state.workspaces = vec![odyssey, worktree];
+
+        // Picker preselects the current parent (Odyssey).
+        app.open_move_workspace_picker(1);
+        let move_state = app.state.worktree_move.as_ref().expect("picker open");
+        assert_eq!(
+            move_state.entries[move_state.selected].target_id.as_deref(),
+            Some(odyssey_id.as_str())
+        );
+
+        // Choose "top level" (index 0) and submit.
+        app.state
+            .worktree_move
+            .as_mut()
+            .expect("picker open")
+            .selected = 0;
+        app.submit_move_workspace();
+
+        let moved = app
+            .state
+            .workspaces
+            .iter()
+            .find(|ws| ws.id == worktree_id)
+            .expect("worktree still present");
+        assert_eq!(moved.parent_workspace_id, None);
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[test]
+    fn worktree_target_selector_defaults_to_focused_worktrees_group() {
+        let mut app = app_for_worktree_tests();
+        let odyssey = crate::workspace::Workspace::test_new("odyssey");
+        let bifrost = crate::workspace::Workspace::test_new("bifrost");
+        let odyssey_id = odyssey.id.clone();
+        let mut worktree = crate::workspace::Workspace::test_new("feature-wt");
+        worktree.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+            key: "repo-key".into(),
+            label: "herdr".into(),
+            repo_root: "/repo/herdr".into(),
+            checkout_path: "/repo/herdr-feature".into(),
+            is_linked_worktree: true,
+        });
+        worktree.parent_workspace_id = Some(odyssey_id.clone());
+        app.state.workspaces = vec![odyssey, bifrost, worktree];
+
+        // Options are "top level" plus the two top-level workspaces (the worktree
+        // being acted from is not itself a valid filing target).
+        let selector = app.build_worktree_target_selector(2);
+        let labels: Vec<&str> = selector
+            .options
+            .iter()
+            .map(|option| option.label.as_str())
+            .collect();
+        assert_eq!(labels, vec!["top level", "odyssey", "bifrost"]);
+        // Defaults to the worktree's group (Odyssey), not "top level".
+        assert_eq!(selector.selected_target_id(), Some(odyssey_id));
+        assert!(!selector.expanded);
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[test]
+    fn worktree_target_selector_defaults_to_self_for_top_level_source() {
+        let mut app = app_for_worktree_tests();
+        let odyssey = crate::workspace::Workspace::test_new("odyssey");
+        let odyssey_id = odyssey.id.clone();
+        app.state.workspaces = vec![odyssey];
+
+        let selector = app.build_worktree_target_selector(0);
+        assert_eq!(selector.selected_target_id(), Some(odyssey_id));
+        shutdown_test_runtimes(&mut app);
+    }
+
     fn app_for_worktree_tests() -> App {
         app_for_worktree_tests_with_event_hub(crate::api::EventHub::default())
     }
@@ -1151,6 +1472,7 @@ mod tests {
             checkout_path: "/repo/herdr-generated-branch".into(),
             error: None,
             creating: false,
+            target: Default::default(),
         });
 
         app.insert_worktree_create_text("feature/linear-302");
@@ -1194,6 +1516,7 @@ mod tests {
             query: String::new(),
             search_focused: true,
             error: None,
+            target: Default::default(),
         });
 
         app.insert_worktree_open_search_text("linear-302");
@@ -1218,6 +1541,7 @@ mod tests {
             query: String::new(),
             search_focused: false,
             error: None,
+            target: Default::default(),
         });
 
         app.insert_worktree_open_search_text("linear-302");
@@ -1258,6 +1582,7 @@ mod tests {
             query: String::new(),
             search_focused: false,
             error: None,
+            target: Default::default(),
         });
 
         app.open_selected_existing_worktree();
@@ -1308,6 +1633,7 @@ mod tests {
             query: String::new(),
             search_focused: false,
             error: None,
+            target: Default::default(),
         });
 
         app.open_selected_existing_worktree();
@@ -1354,6 +1680,7 @@ mod tests {
             query: String::new(),
             search_focused: false,
             error: None,
+            target: Default::default(),
         });
 
         app.open_selected_existing_worktree();
@@ -1419,6 +1746,7 @@ mod tests {
             query: String::new(),
             search_focused: false,
             error: None,
+            target: Default::default(),
         });
 
         app.handle_worktree_open_key(crossterm::event::KeyEvent::new(
@@ -1492,7 +1820,7 @@ mod tests {
     }
 
     #[test]
-    fn worktree_create_and_open_dialogs_reject_linked_child_source() {
+    fn worktree_create_dialog_starts_from_linked_child_source() {
         let mut app = app_for_worktree_tests();
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("issue")];
         app.state.mode = Mode::Navigate;
@@ -1506,18 +1834,20 @@ mod tests {
 
         app.open_new_linked_worktree_dialog(0);
 
-        assert_eq!(app.state.mode, Mode::Navigate);
-        assert!(app.state.worktree_create.is_none());
+        // The new-worktree dialog now opens from a linked worktree, resolving the
+        // action against the shared repo root instead of rejecting it. (The open
+        // dialog exercises real `git worktree list`; see the git-fixture tests.)
+        let create = app
+            .state
+            .worktree_create
+            .as_ref()
+            .expect("new-worktree dialog should open from a linked worktree");
         assert_eq!(
-            app.state.config_diagnostic.as_deref(),
-            Some("New and open worktree actions start from the repo parent workspace.")
+            create.source_repo_root,
+            std::path::PathBuf::from("/repo/herdr")
         );
-
-        app.state.config_diagnostic = None;
-        app.open_existing_worktree_dialog(0);
-
-        assert!(app.state.worktree_open.is_none());
-        assert_eq!(
+        assert_eq!(create.repo_key, "repo-key");
+        assert_ne!(
             app.state.config_diagnostic.as_deref(),
             Some("New and open worktree actions start from the repo parent workspace.")
         );
@@ -1539,6 +1869,7 @@ mod tests {
             checkout_path: std::path::PathBuf::from("/old"),
             error: Some("old error".into()),
             creating: false,
+            target: Default::default(),
         });
 
         app.sync_worktree_branch_from_input();
@@ -1584,6 +1915,7 @@ mod tests {
             checkout_path,
             error: None,
             creating: false,
+            target: Default::default(),
         });
 
         app.handle_worktree_create_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
@@ -1643,6 +1975,7 @@ mod tests {
             query: String::new(),
             search_focused: false,
             error: None,
+            target: Default::default(),
         });
 
         app.handle_worktree_open_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
@@ -1735,6 +2068,7 @@ mod tests {
             checkout_path: checkout.clone(),
             error: None,
             creating: true,
+            target: Default::default(),
         });
         let plugin_root = unique_temp_path("app-worktree-create-plugin");
         std::fs::create_dir_all(&plugin_root).unwrap();
@@ -1860,6 +2194,7 @@ mod tests {
             checkout_path: checkout.clone(),
             error: None,
             creating: true,
+            target: Default::default(),
         });
 
         app.handle_worktree_add_finished(WorktreeAddResult {
@@ -1908,6 +2243,7 @@ mod tests {
             checkout_path: checkout.clone(),
             error: None,
             creating: false,
+            target: Default::default(),
         });
 
         app.start_worktree_add();
@@ -1955,6 +2291,7 @@ mod tests {
             checkout_path: checkout.clone(),
             error: None,
             creating: false,
+            target: Default::default(),
         });
 
         app.start_worktree_add();
@@ -2080,6 +2417,7 @@ mod tests {
             checkout_path: checkout.clone(),
             error: None,
             creating: false,
+            target: Default::default(),
         });
 
         app.start_worktree_add();

@@ -152,6 +152,9 @@ fn worktree_create(args: &[String]) -> std::io::Result<i32> {
         path,
         label,
         focus,
+        // CLI does not choose a filing target; the server derives it from source.
+        target_workspace_id: None,
+        target_workspace_specified: false,
     })
 }
 
@@ -241,6 +244,9 @@ fn worktree_open(args: &[String]) -> std::io::Result<i32> {
         branch,
         label,
         focus,
+        // CLI does not choose a filing target; the server derives it from source.
+        target_workspace_id: None,
+        target_workspace_specified: false,
     })
 }
 

@@ -84,6 +84,11 @@ impl App {
                 "exactly one of path or branch is required",
             );
         }
+        // Sidebar grouping inputs, captured before source resolution consumes the
+        // params (source resolution may redirect to the repo's parent workspace).
+        let invoking_workspace_id: Option<String> = params.workspace_id.clone();
+        let explicit_target_specified = params.target_workspace_specified;
+        let explicit_target_id = params.target_workspace_id.clone();
         let mut source = match self.resolve_worktree_source(params.workspace_id, params.cwd) {
             Ok(source) => source,
             Err(err) => return encode_error(id, err.code, err.message),
@@ -131,6 +136,37 @@ impl App {
             canonical_path != crate::worktree::canonical_or_original(&source.source_repo_root),
             !created_workspace,
         );
+        // File a freshly opened worktree for sidebar grouping. When invoked from a
+        // specific workspace, group per `worktree_filing_parent` (which may return
+        // None => top level for a worktree with no explicit parent). When there is
+        // no invoking workspace (opened by cwd/active), file under the resolved
+        // source workspace as before.
+        if created_workspace && !target_is_source {
+            let parent_id = if explicit_target_specified {
+                // Explicit choice from the dialog: Some => file under that
+                // workspace; None => top level. Resolve/validate against current
+                // workspaces so a stale id can't dangle.
+                explicit_target_id.as_deref().and_then(|pid| {
+                    self.parse_workspace_id(pid)
+                        .and_then(|idx| self.state.workspaces.get(idx))
+                        .map(|ws| ws.id.clone())
+                })
+            } else if invoking_workspace_id.is_some() {
+                self.worktree_filing_parent(invoking_workspace_id.as_deref())
+            } else {
+                source
+                    .workspace_idx
+                    .and_then(|idx| self.state.workspaces.get(idx))
+                    .map(|ws| ws.id.clone())
+            };
+            if let Some(parent_id) = parent_id {
+                if let Some(ws) = self.state.workspaces.get_mut(ws_idx) {
+                    if ws.id != parent_id {
+                        ws.parent_workspace_id = Some(parent_id);
+                    }
+                }
+            }
+        }
         if let Some(label) = params.label {
             let workspace_id = self.public_workspace_id(ws_idx);
             if let Some(ws) = self.state.workspaces.get_mut(ws_idx) {
@@ -231,6 +267,26 @@ impl App {
         self.worktree_source_from_workspace(ws_idx)
     }
 
+    /// The workspace a freshly opened/created worktree should be filed under for
+    /// sidebar grouping, given the public id of the workspace the action was
+    /// invoked from. Starting from the repo-root workspace files the result under
+    /// it; starting from within a linked worktree joins that worktree's group —
+    /// inheriting its explicit parent, or top level (`None`) when the worktree has
+    /// no explicit parent. Returns `None` if the invoking workspace can't be found.
+    fn worktree_filing_parent(&self, invoking_workspace_id: Option<&str>) -> Option<String> {
+        let ws = invoking_workspace_id
+            .and_then(|pid| self.parse_workspace_id(pid))
+            .and_then(|idx| self.state.workspaces.get(idx))?;
+        if ws
+            .worktree_space()
+            .is_some_and(|space| space.is_linked_worktree)
+        {
+            ws.parent_workspace_id.clone()
+        } else {
+            Some(ws.id.clone())
+        }
+    }
+
     fn resolve_worktree_list_source(
         &mut self,
         workspace_id: Option<String>,
@@ -286,16 +342,23 @@ impl App {
                 "workspace not found",
             ));
         };
+        // A linked worktree resolves the action against its shared repo root: the
+        // source checkout and parent workspace redirect to the repo root, so the
+        // action behaves as if started from the repo-root workspace.
         if let Some(membership) = ws.worktree_space() {
-            if membership.is_linked_worktree {
-                return Err(ApiFailure::new(
-                    "linked_worktree_source",
-                    "New and open worktree actions start from the repo parent workspace.",
-                ));
-            }
+            let source_checkout_path = if membership.is_linked_worktree {
+                membership.repo_root.clone()
+            } else {
+                membership.checkout_path.clone()
+            };
+            let workspace_idx = if membership.is_linked_worktree {
+                self.open_workspace_idx_for_checkout(&membership.repo_root)
+            } else {
+                Some(ws_idx)
+            };
             return Ok(WorktreeSource {
-                workspace_idx: Some(ws_idx),
-                source_checkout_path: membership.checkout_path.clone(),
+                workspace_idx,
+                source_checkout_path,
                 source_repo_root: membership.repo_root.clone(),
                 repo_key: membership.key.clone(),
                 repo_name: membership.label.clone(),
@@ -313,14 +376,13 @@ impl App {
                 "Herdr worktree actions require a workspace inside a Git work tree",
             ));
         };
-        if space.is_linked_worktree {
-            return Err(ApiFailure::new(
-                "linked_worktree_source",
-                "New and open worktree actions start from the repo parent workspace.",
-            ));
-        }
+        let workspace_idx = if space.is_linked_worktree {
+            self.list_source_workspace_idx_for_space(&space)
+        } else {
+            Some(ws_idx)
+        };
         Ok(WorktreeSource {
-            workspace_idx: Some(ws_idx),
+            workspace_idx,
             source_checkout_path: space.repo_root.clone(),
             source_repo_root: space.repo_root,
             repo_key: space.key,
@@ -1193,6 +1255,8 @@ mod tests {
                 repo_name: "herdr".into(),
                 label: None,
                 focus: false,
+                target_workspace_id: None,
+                target_workspace_specified: false,
                 respond_to,
             }),
             result: Ok(()),
@@ -2110,6 +2174,8 @@ mod tests {
                     path: Some(checkout.display().to_string()),
                     label: None,
                     focus: false,
+                    target_workspace_id: None,
+                    target_workspace_specified: false,
                 }),
             },
             respond_to,

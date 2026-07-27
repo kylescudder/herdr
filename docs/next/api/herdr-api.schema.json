@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "protocol": 18,
+  "protocol": 19,
   "schema_version": 1,
   "schemas": {
     "error_response": {
@@ -4232,6 +4232,17 @@
                 "null"
               ]
             },
+            "target_workspace_id": {
+              "description": "Sidebar grouping: the workspace the new worktree is filed under. Only\nhonored when `target_workspace_specified` is true; `None` then files it at\ntop level. When `target_workspace_specified` is false the server derives the\nparent from the source workspace (see `worktree_filing_parent`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target_workspace_specified": {
+              "default": false,
+              "type": "boolean"
+            },
             "workspace_id": {
               "type": [
                 "string",
@@ -4287,6 +4298,17 @@
                 "string",
                 "null"
               ]
+            },
+            "target_workspace_id": {
+              "description": "Sidebar grouping: the workspace the opened worktree is filed under. Only\nhonored when `target_workspace_specified` is true; `None` then files it at\ntop level. When `target_workspace_specified` is false the server derives the\nparent from the source workspace (see `worktree_filing_parent`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target_workspace_specified": {
+              "default": false,
+              "type": "boolean"
             },
             "workspace_id": {
               "type": [

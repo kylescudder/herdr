@@ -95,6 +95,70 @@ impl AppState {
         }
     }
 
+    /// Handle a left-click against the workspace dropdown in the New/Open Worktree
+    /// dialogs. Returns true if the click hit the selector (an option, the row
+    /// toggle, or a click-outside that closes an open dropdown) and was consumed.
+    fn worktree_target_click(
+        &mut self,
+        is_open_dialog: bool,
+        row: Rect,
+        inner: Rect,
+        x: u16,
+        y: u16,
+    ) -> bool {
+        enum Act {
+            Select(usize),
+            Toggle,
+            Collapse,
+            None,
+        }
+        let act = {
+            let selector = if is_open_dialog {
+                self.worktree_open.as_ref().map(|open| &open.target)
+            } else {
+                self.worktree_create.as_ref().map(|create| &create.target)
+            };
+            let Some(selector) = selector else {
+                return false;
+            };
+            if let Some(index) = crate::ui::worktree_target_option_at(row, inner, selector, x, y) {
+                Act::Select(index)
+            } else if rect_contains(row, x, y) {
+                Act::Toggle
+            } else if selector.expanded {
+                Act::Collapse
+            } else {
+                Act::None
+            }
+        };
+        let target = if is_open_dialog {
+            self.worktree_open.as_mut().map(|open| &mut open.target)
+        } else {
+            self.worktree_create
+                .as_mut()
+                .map(|create| &mut create.target)
+        };
+        let Some(target) = target else {
+            return false;
+        };
+        match act {
+            Act::Select(index) => {
+                target.selected = index;
+                target.expanded = false;
+                true
+            }
+            Act::Toggle => {
+                target.expanded = !target.expanded;
+                true
+            }
+            Act::Collapse => {
+                target.expanded = false;
+                true
+            }
+            Act::None => false,
+        }
+    }
+
     pub(super) fn handle_mouse(
         &mut self,
         terminal_runtimes: &mut TerminalRuntimeRegistry,
@@ -211,7 +275,10 @@ impl AppState {
 
         if matches!(
             self.mode,
-            Mode::NewLinkedWorktree | Mode::OpenExistingWorktree | Mode::ConfirmRemoveWorktree
+            Mode::NewLinkedWorktree
+                | Mode::OpenExistingWorktree
+                | Mode::ConfirmRemoveWorktree
+                | Mode::MoveWorktreeToWorkspace
         ) && !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
         {
             return None;
@@ -253,6 +320,16 @@ impl AppState {
                     if let Some(inner) =
                         crate::ui::new_linked_worktree_inner_rect(self.screen_rect())
                     {
+                        let target_row = crate::ui::new_worktree_target_row_rect(inner);
+                        if self.worktree_target_click(
+                            false,
+                            target_row,
+                            inner,
+                            mouse.column,
+                            mouse.row,
+                        ) {
+                            return None;
+                        }
                         let (create, cancel) = crate::ui::new_linked_worktree_button_rects(inner);
                         match modal_action_from_buttons(
                             mouse.column,
@@ -283,6 +360,26 @@ impl AppState {
                 }
 
                 if self.mode == Mode::OpenExistingWorktree {
+                    // Workspace dropdown first, in its own borrow scope (the check
+                    // below re-borrows `worktree_open` immutably for the entry list).
+                    let target_inner = self.worktree_open.as_ref().and_then(|open| {
+                        crate::ui::open_existing_worktree_inner_rect(
+                            self.screen_rect(),
+                            open.entries.len(),
+                        )
+                    });
+                    if let Some(inner) = target_inner {
+                        let target_row = crate::ui::open_worktree_target_row_rect(inner);
+                        if self.worktree_target_click(
+                            true,
+                            target_row,
+                            inner,
+                            mouse.column,
+                            mouse.row,
+                        ) {
+                            return None;
+                        }
+                    }
                     if let Some(open) = self.worktree_open.as_ref() {
                         if let Some(inner) = crate::ui::open_existing_worktree_inner_rect(
                             self.screen_rect(),
@@ -381,6 +478,39 @@ impl AppState {
                             }
                             _ => {}
                         }
+                    }
+                    return None;
+                }
+
+                if self.mode == Mode::MoveWorktreeToWorkspace {
+                    if let Some(hits) = crate::ui::move_workspace_hitboxes(self, self.screen_rect())
+                    {
+                        // Clicking a destination row selects and commits it in one
+                        // action (mouse-first): no separate confirm needed.
+                        let clicked_row = self.worktree_move.as_ref().and_then(|move_state| {
+                            crate::ui::move_workspace_entry_at_row(move_state, hits.list, mouse.row)
+                        });
+                        if let Some(index) = clicked_row {
+                            if let Some(move_state) = self.worktree_move.as_mut() {
+                                move_state.selected = index;
+                            }
+                            self.apply_move_workspace();
+                            return None;
+                        }
+                        match modal_action_from_buttons(
+                            mouse.column,
+                            mouse.row,
+                            &[
+                                (hits.move_button, ModalAction::Confirm),
+                                (hits.cancel_button, ModalAction::Cancel),
+                            ],
+                        ) {
+                            Some(ModalAction::Confirm) => self.apply_move_workspace(),
+                            Some(ModalAction::Cancel) | None => self.cancel_move_workspace(),
+                            _ => {}
+                        }
+                    } else {
+                        self.cancel_move_workspace();
                     }
                     return None;
                 }
@@ -2533,6 +2663,7 @@ mod tests {
             query: String::new(),
             search_focused: false,
             error: None,
+            target: Default::default(),
         }
     }
 

@@ -55,6 +55,8 @@ pub struct WorkspaceSnapshot {
     pub identity_cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_space: Option<crate::workspace::WorktreeSpaceMembership>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_workspace_id: Option<String>,
     #[serde(default)]
     pub public_pane_numbers: HashMap<u32, usize>,
     #[serde(default)]
@@ -158,6 +160,7 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
             custom_name: snap.custom_name,
             identity_cwd,
             worktree_space: None,
+            parent_workspace_id: None,
             public_pane_numbers: HashMap::new(),
             next_public_pane_number: 0,
             public_tab_numbers: Vec::new(),
@@ -291,6 +294,7 @@ fn capture_workspace(
             .resolved_identity_cwd_from(terminals, terminal_runtimes)
             .unwrap_or_else(|| ws.identity_cwd.clone()),
         worktree_space: ws.worktree_space.clone(),
+        parent_workspace_id: ws.parent_workspace_id.clone(),
         public_pane_numbers: ws
             .public_pane_numbers
             .iter()
@@ -668,6 +672,7 @@ mod tests {
                 custom_name: Some("pi-mono".to_string()),
                 identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
                 worktree_space: None,
+                parent_workspace_id: None,
                 public_pane_numbers: HashMap::from([(0, 1), (1, 2)]),
                 next_public_pane_number: 3,
                 public_tab_numbers: vec![1],
@@ -895,6 +900,23 @@ mod tests {
         assert_eq!(
             snapshot.workspaces[0].worktree_space,
             state.workspaces[0].worktree_space
+        );
+    }
+
+    #[test]
+    fn capture_contract_tracks_parent_workspace_grouping() {
+        // The manual sidebar grouping pointer must persist so a worktree filed
+        // under a chosen workspace stays there across restart.
+        let mut state = state_with_workspaces(&["parent", "child"]);
+        let parent_id = state.workspaces[0].id.clone();
+        state.workspaces[1].parent_workspace_id = Some(parent_id.clone());
+
+        let snapshot = capture_from_state(&state);
+
+        assert_eq!(snapshot.workspaces[0].parent_workspace_id, None);
+        assert_eq!(
+            snapshot.workspaces[1].parent_workspace_id.as_deref(),
+            Some(parent_id.as_str())
         );
     }
 
@@ -1230,6 +1252,7 @@ mod tests {
                 custom_name: Some("fallback test".to_string()),
                 identity_cwd: PathBuf::from("/tmp"),
                 worktree_space: None,
+                parent_workspace_id: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),

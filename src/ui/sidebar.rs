@@ -255,11 +255,83 @@ fn workspace_attention_priority(state: AgentState, seen: bool) -> u8 {
     }
 }
 
+/// Index of the workspace that `ws` is grouped under (its sidebar parent), or
+/// `None` if `ws` is top-level. An explicit `parent_workspace_id` (a worktree
+/// opened "into" a chosen workspace) always wins; otherwise it falls back to the
+/// historic git-repo grouping — a linked worktree nests under the non-linked
+/// checkout of the same repo when that repo group has ≥2 members.
+/// The workspace `ws` is filed directly beneath: an explicit `parent_workspace_id`
+/// pointer wins, otherwise the historic git-repo fallback nests a linked worktree
+/// under the non-linked member of its repo group. Returns the *direct* parent only.
+fn workspace_direct_parent_index(
+    app: &AppState,
+    ws: &crate::workspace::Workspace,
+) -> Option<usize> {
+    if let Some(parent_id) = ws.parent_workspace_id.as_deref() {
+        if let Some(idx) = app
+            .workspaces
+            .iter()
+            .position(|other| other.id == parent_id && other.id != ws.id)
+        {
+            return Some(idx);
+        }
+    }
+    let space = ws.worktree_space()?;
+    if !space.is_linked_worktree {
+        return None;
+    }
+    let key = space.key.as_str();
+    let member_count = app
+        .workspaces
+        .iter()
+        .filter(|other| other.worktree_space().is_some_and(|s| s.key == key))
+        .count();
+    if member_count < 2 {
+        return None;
+    }
+    app.workspaces.iter().position(|other| {
+        other
+            .worktree_space()
+            .is_some_and(|s| s.key == key && !s.is_linked_worktree)
+    })
+}
+
+/// The top-level workspace `ws` is grouped under, resolved through the parent chain
+/// to the top-most ancestor. The sidebar renders exactly two levels, so a workspace
+/// filed under another that is itself filed under a third collapses to that third
+/// ancestor instead of orphaning its subtree. `None` means `ws` is top-level.
+pub(crate) fn workspace_parent_index(
+    app: &AppState,
+    ws: &crate::workspace::Workspace,
+) -> Option<usize> {
+    let mut current = workspace_direct_parent_index(app, ws)?;
+    // Walk up while the parent itself has a parent. Bounded by the workspace count
+    // so a malformed cycle (e.g. from a restored snapshot) can't loop forever.
+    for _ in 0..app.workspaces.len() {
+        let Some(parent_ws) = app.workspaces.get(current) else {
+            break;
+        };
+        match workspace_direct_parent_index(app, parent_ws) {
+            Some(next) if next != current => current = next,
+            _ => break,
+        }
+    }
+    Some(current)
+}
+
+/// Aggregate agent state across a group: the header workspace (`key` = its id)
+/// plus every workspace grouped under it (explicit parent or git-repo fallback).
 fn space_aggregate_state(app: &AppState, key: &str) -> (AgentState, bool) {
+    let Some(parent_idx) = app.workspaces.iter().position(|ws| ws.id == key) else {
+        return (AgentState::Unknown, true);
+    };
     app.workspaces
         .iter()
-        .filter(|ws| ws.worktree_space().is_some_and(|space| space.key == key))
-        .map(|ws| ws.aggregate_state(&app.terminals))
+        .enumerate()
+        .filter(|(idx, ws)| {
+            *idx == parent_idx || workspace_parent_index(app, ws) == Some(parent_idx)
+        })
+        .map(|(_, ws)| ws.aggregate_state(&app.terminals))
         .max_by_key(|(state, seen)| workspace_attention_priority(*state, *seen))
         .unwrap_or((AgentState::Unknown, true))
 }
@@ -268,24 +340,16 @@ pub(crate) fn workspace_parent_group_state(
     app: &AppState,
     ws_idx: usize,
 ) -> Option<(String, bool)> {
-    let space = app.workspaces.get(ws_idx)?.worktree_space()?;
-    if space.is_linked_worktree {
+    let ws = app.workspaces.get(ws_idx)?;
+    // Only a top-level workspace (not itself filed under another) can be a header.
+    if workspace_parent_index(app, ws).is_some() {
         return None;
     }
-    let member_count = app
-        .workspaces
-        .iter()
-        .filter(|ws| {
-            ws.worktree_space()
-                .is_some_and(|member| member.key == space.key)
-        })
-        .count();
-    (member_count >= 2).then(|| {
-        (
-            space.key.clone(),
-            app.collapsed_space_keys.contains(&space.key),
-        )
-    })
+    let has_children =
+        app.workspaces.iter().enumerate().any(|(idx, other)| {
+            idx != ws_idx && workspace_parent_index(app, other) == Some(ws_idx)
+        });
+    has_children.then(|| (ws.id.clone(), app.collapsed_space_keys.contains(&ws.id)))
 }
 
 pub(crate) fn grouped_child_display_label(
@@ -343,97 +407,51 @@ pub(crate) fn workspace_list_entries_expanded(app: &AppState) -> Vec<WorkspaceLi
 }
 
 fn workspace_list_entries_inner(app: &AppState, force_expanded: bool) -> Vec<WorkspaceListEntry> {
-    let mut members_by_key = std::collections::HashMap::<String, Vec<usize>>::new();
+    // Grouping is by an explicit parent-workspace pointer, not the git repo:
+    // a worktree opened "into" a workspace renders nested beneath it, so two
+    // workspaces from the same repo stay separate top-level entries.
+    let mut children_by_parent = std::collections::HashMap::<usize, Vec<usize>>::new();
     for (ws_idx, ws) in app.workspaces.iter().enumerate() {
-        if let Some(space) = ws.worktree_space() {
-            members_by_key
-                .entry(space.key.clone())
+        if let Some(parent_idx) = workspace_parent_index(app, ws) {
+            children_by_parent
+                .entry(parent_idx)
                 .or_default()
                 .push(ws_idx);
         }
     }
-    let grouped_keys = members_by_key
-        .iter()
-        .filter(|(_, members)| {
-            members.len() >= 2
-                && members.iter().any(|idx| {
-                    app.workspaces
-                        .get(*idx)
-                        .and_then(|ws| ws.worktree_space())
-                        .is_some_and(|space| !space.is_linked_worktree)
-                })
-        })
-        .map(|(key, _)| key.clone())
-        .collect::<std::collections::HashSet<_>>();
 
     let visible_group_idx = if matches!(app.mode, Mode::Navigate) {
         Some(app.selected)
     } else {
         app.active
     };
-    let active_group = visible_group_idx.and_then(|idx| {
-        app.workspaces
-            .get(idx)
-            .and_then(|ws| ws.worktree_space())
-            .map(|space| space.key.clone())
-    });
 
-    let mut emitted_groups = std::collections::HashSet::<String>::new();
     let mut entries = Vec::new();
     for (ws_idx, ws) in app.workspaces.iter().enumerate() {
-        let Some(space) = ws
-            .worktree_space()
-            .filter(|space| grouped_keys.contains(&space.key))
-        else {
-            entries.push(WorkspaceListEntry::Workspace {
-                ws_idx,
-                indented: false,
-            });
-            continue;
-        };
-
-        if !emitted_groups.insert(space.key.clone()) {
+        // Children are emitted beneath their parent below, not at the top level.
+        if workspace_parent_index(app, ws).is_some() {
             continue;
         }
-
-        let Some(members) = members_by_key.get(&space.key) else {
-            continue;
-        };
-        let Some(parent_idx) = members.iter().copied().find(|idx| {
-            app.workspaces
-                .get(*idx)
-                .and_then(|member| member.worktree_space())
-                .is_some_and(|member_space| !member_space.is_linked_worktree)
-        }) else {
-            entries.push(WorkspaceListEntry::Workspace {
-                ws_idx,
-                indented: false,
-            });
-            continue;
-        };
-        let collapsed = !force_expanded && app.collapsed_space_keys.contains(&space.key);
         entries.push(WorkspaceListEntry::Workspace {
-            ws_idx: parent_idx,
+            ws_idx,
             indented: false,
         });
-
+        let Some(children) = children_by_parent.get(&ws_idx) else {
+            continue;
+        };
+        let collapsed = !force_expanded && app.collapsed_space_keys.contains(&ws.id);
         if collapsed {
-            if let Some(active_idx) = visible_group_idx
-                .filter(|idx| *idx != parent_idx)
-                .filter(|_| active_group.as_deref() == Some(space.key.as_str()))
-            {
+            // Keep the active/selected child visible even while collapsed.
+            if let Some(active_idx) = visible_group_idx.filter(|idx| children.contains(idx)) {
                 entries.push(WorkspaceListEntry::Workspace {
                     ws_idx: active_idx,
                     indented: true,
                 });
             }
         } else {
-            for member_idx in members {
-                if *member_idx == parent_idx {
-                    continue;
-                }
+            for &child in children {
                 entries.push(WorkspaceListEntry::Workspace {
-                    ws_idx: *member_idx,
+                    ws_idx: child,
                     indented: true,
                 });
             }
@@ -2280,6 +2298,101 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         ws
     }
 
+    #[test]
+    fn worktree_filed_under_chosen_workspace_nests_regardless_of_repo() {
+        let mut app = AppState::test_new();
+        // Odyssey (repo checkout), a separate Bifrost workspace, and a worktree of
+        // the SAME repo explicitly filed under Bifrost.
+        let odyssey = workspace_with_worktree_space("main", Some("repo-key"), "/repo/herdr");
+        let bifrost = Workspace::test_new("bifrost");
+        let mut worktree = workspace_with_worktree_space("wt", Some("repo-key"), "/repo/herdr-wt");
+        worktree.parent_workspace_id = Some(bifrost.id.clone());
+        app.workspaces = vec![odyssey, bifrost, worktree];
+
+        // The worktree nests under Bifrost (its chosen parent), NOT under Odyssey,
+        // even though both are the same git repo. Odyssey stays a top-level entry.
+        assert_eq!(
+            workspace_list_entries(&app),
+            vec![
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 0,
+                    indented: false,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 1,
+                    indented: false,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 2,
+                    indented: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_parent_chain_flattens_to_two_levels_without_orphaning() {
+        let mut app = AppState::test_new();
+        // A is top-level. B is filed under A. C is filed under B. The sidebar only
+        // renders two levels, so both B and C must resolve to A and render indented
+        // beneath it — C must not vanish because its direct parent B is itself nested.
+        let a = Workspace::test_new("a");
+        let mut b = Workspace::test_new("b");
+        b.parent_workspace_id = Some(a.id.clone());
+        let mut c = Workspace::test_new("c");
+        c.parent_workspace_id = Some(b.id.clone());
+        app.workspaces = vec![a, b, c];
+
+        assert_eq!(workspace_parent_index(&app, &app.workspaces[1]), Some(0));
+        assert_eq!(workspace_parent_index(&app, &app.workspaces[2]), Some(0));
+        assert_eq!(
+            workspace_list_entries(&app),
+            vec![
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 0,
+                    indented: false,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 1,
+                    indented: true,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 2,
+                    indented: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parent_pointer_cycle_does_not_loop_forever() {
+        let mut app = AppState::test_new();
+        // A malformed restored snapshot could point two workspaces at each other.
+        // Resolution must terminate (bounded walk), not hang.
+        let mut a = Workspace::test_new("a");
+        let mut b = Workspace::test_new("b");
+        a.parent_workspace_id = Some(b.id.clone());
+        b.parent_workspace_id = Some(a.id.clone());
+        app.workspaces = vec![a, b];
+
+        // Both resolve to *some* index without panicking or spinning (bounded walk).
+        let _ = workspace_parent_index(&app, &app.workspaces[0]);
+        let _ = workspace_parent_index(&app, &app.workspaces[1]);
+        // Rendering terminates and never emits a workspace more than once. (A pure
+        // cycle is degenerate corruption; the picker can't create one because it
+        // only offers already-top-level destinations.)
+        let entries = workspace_list_entries(&app);
+        let mut seen: Vec<usize> = entries
+            .iter()
+            .map(|WorkspaceListEntry::Workspace { ws_idx, .. }| *ws_idx)
+            .collect();
+        let total = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), total, "no workspace rendered twice");
+        assert!(total <= app.workspaces.len());
+    }
+
     fn workspace_with_git_space(name: &str, key: &str) -> crate::workspace::Workspace {
         let mut ws = crate::workspace::Workspace::test_new(name);
         ws.cached_git_space = Some(crate::workspace::GitSpaceMetadata {
@@ -2447,7 +2560,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         for workspace in &mut app.workspaces {
             workspace.cached_git_branch = Some("main".into());
         }
-        app.collapsed_space_keys.insert("repo-key".into());
+        app.collapsed_space_keys
+            .insert(app.workspaces[0].id.clone());
         app.active = None;
         app.mode = Mode::Terminal;
 
@@ -2467,7 +2581,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             workspace_with_worktree_space("issue", Some("repo-key"), "/repo/herdr-issue"),
             Workspace::test_new("notes"),
         ];
-        app.collapsed_space_keys.insert("repo-key".into());
+        app.collapsed_space_keys
+            .insert(app.workspaces[0].id.clone());
         app.active = None;
         app.mode = Mode::Terminal;
         app.workspace_scroll = 1;
@@ -2613,7 +2728,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         ];
         app.active = Some(1);
         app.mode = Mode::Terminal;
-        app.collapsed_space_keys.insert("repo-key".into());
+        app.collapsed_space_keys
+            .insert(app.workspaces[0].id.clone());
 
         assert_eq!(
             workspace_list_entries(&app),
@@ -2650,7 +2766,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.mode = Mode::Navigate;
         app.selected = 1;
         app.active = Some(1);
-        app.collapsed_space_keys.insert("repo-key".into());
+        app.collapsed_space_keys
+            .insert(app.workspaces[0].id.clone());
 
         assert_eq!(
             workspace_list_entries(&app),

@@ -194,6 +194,12 @@ impl App {
                     leave_navigate_mode(&mut self.state);
                 }
             }
+            NavigateAction::MoveWorktree => {
+                if let Some(ws_idx) = workspace_action_target(&self.state, context) {
+                    self.state.request_move_workspace = Some(ws_idx);
+                    leave_navigate_mode(&mut self.state);
+                }
+            }
             NavigateAction::OpenWorktree => {
                 if let Some(ws_idx) = workspace_action_target(&self.state, context).filter(|idx| {
                     workspace_can_start_worktree_action(&self.state, &self.terminal_runtimes, *idx)
@@ -1286,6 +1292,7 @@ pub(crate) fn handle_navigate_key(state: &mut AppState, key: KeyEvent) {
 pub(crate) enum NavigateAction {
     NewWorkspace,
     NewWorktree,
+    MoveWorktree,
     OpenWorktree,
     RemoveWorktree,
     RenameWorkspace,
@@ -1423,6 +1430,7 @@ fn non_indexed_action_for_key(
         (&kb.workspace_picker, NavigateAction::WorkspacePicker),
         (&kb.new_workspace, NavigateAction::NewWorkspace),
         (&kb.new_worktree, NavigateAction::NewWorktree),
+        (&kb.move_worktree, NavigateAction::MoveWorktree),
         (&kb.open_worktree, NavigateAction::OpenWorktree),
         (&kb.remove_worktree, NavigateAction::RemoveWorktree),
         (&kb.rename_workspace, NavigateAction::RenameWorkspace),
@@ -1553,6 +1561,12 @@ pub(super) fn execute_navigate_action_in_context(
         NavigateAction::RemoveWorktree => {
             if let Some(ws_idx) = workspace_action_target(state, context) {
                 state.request_remove_linked_worktree = Some(ws_idx);
+                leave_navigate_mode(state);
+            }
+        }
+        NavigateAction::MoveWorktree => {
+            if let Some(ws_idx) = workspace_action_target(state, context) {
+                state.request_move_workspace = Some(ws_idx);
                 leave_navigate_mode(state);
             }
         }
@@ -1734,24 +1748,15 @@ fn workspace_action_target(state: &AppState, context: ActionContext) -> Option<u
 
 fn workspace_can_start_worktree_action(
     state: &AppState,
-    terminal_runtimes: &TerminalRuntimeRegistry,
+    _terminal_runtimes: &TerminalRuntimeRegistry,
     ws_idx: usize,
 ) -> bool {
-    let Some(ws) = state.workspaces.get(ws_idx) else {
-        return false;
-    };
-    if ws
-        .worktree_space()
-        .is_some_and(|space| space.is_linked_worktree)
-    {
-        return false;
-    }
-    let git_space = ws.git_space().cloned().or_else(|| {
-        ws.resolved_identity_cwd_from(&state.terminals, terminal_runtimes)
-            .as_deref()
-            .and_then(crate::workspace::git_space_metadata)
-    });
-    !git_space.is_some_and(|space| space.is_linked_worktree)
+    // Any existing workspace may start a worktree action. A linked worktree
+    // resolves the action against its shared repo root; a non-git workspace
+    // surfaces a diagnostic from the dialog builder. This gate only guards against
+    // a stale/out-of-range target index. (Linked worktrees were blocked here
+    // before manual sidebar grouping made "open worktree from a worktree" valid.)
+    state.workspaces.get(ws_idx).is_some()
 }
 
 fn leave_navigate_mode(state: &mut AppState) {
@@ -2109,11 +2114,14 @@ mod tests {
     }
 
     #[test]
-    fn worktree_actions_do_not_start_from_linked_child_workspace() {
+    fn worktree_actions_start_from_linked_child_workspace() {
         let mut terminal_runtimes = TerminalRuntimeRegistry::new();
         let mut state = state_with_workspaces(&["main", "issue"]);
         mark_worktree_space_member(&mut state, 0, "repo-key");
         mark_worktree_space_member(&mut state, 1, "repo-key");
+        // Workspace 1 is a linked worktree (mark_worktree_space_member sets
+        // is_linked_worktree for ws_idx != 0). Worktree actions now start from it,
+        // resolving against the shared repo root.
         state.mode = Mode::Navigate;
         state.selected = 1;
         state.active = Some(0);
@@ -2124,15 +2132,17 @@ mod tests {
             NavigateAction::NewWorktree,
             ActionContext::Navigate,
         );
-        assert_eq!(state.request_new_linked_worktree, None);
+        assert_eq!(state.request_new_linked_worktree, Some(1));
 
+        state.mode = Mode::Navigate;
+        state.selected = 1;
         execute_navigate_action_in_context(
             &mut state,
             &mut terminal_runtimes,
             NavigateAction::OpenWorktree,
             ActionContext::Navigate,
         );
-        assert_eq!(state.request_open_existing_worktree, None);
+        assert_eq!(state.request_open_existing_worktree, Some(1));
     }
 
     #[test]

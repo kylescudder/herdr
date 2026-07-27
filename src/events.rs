@@ -22,6 +22,9 @@ pub struct ApiWorktreeAddRequest {
     pub repo_name: String,
     pub label: Option<String>,
     pub focus: bool,
+    /// Sidebar grouping target chosen in the dialog (see `WorktreeCreateParams`).
+    pub target_workspace_id: Option<String>,
+    pub target_workspace_specified: bool,
     pub respond_to: std::sync::mpsc::Sender<String>,
 }
 

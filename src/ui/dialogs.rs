@@ -11,11 +11,14 @@ use super::widgets::{
     action_button_row_rects, centered_popup_rect, panel_contrast_fg, render_action_button,
     render_modal_header, render_modal_shell, render_panel_shell, ActionButtonSpec,
 };
-use crate::app::{state::WorktreeOpenState, AppState, Mode};
+use crate::app::{
+    state::{WorktreeOpenState, WorktreeTargetSelector},
+    AppState, Mode,
+};
 use crate::terminal::TerminalRuntimeRegistry;
 
 const NEW_LINKED_WORKTREE_POPUP_WIDTH: u16 = 68;
-const NEW_LINKED_WORKTREE_POPUP_HEIGHT: u16 = 12;
+const NEW_LINKED_WORKTREE_POPUP_HEIGHT: u16 = 14;
 
 pub(crate) fn rename_button_rects(inner: Rect) -> (Rect, Rect, Rect) {
     let rects = action_button_row_rects(
@@ -194,7 +197,9 @@ pub(crate) fn open_existing_worktree_inner_rect(area: Rect, entry_count: usize) 
 }
 
 pub(crate) fn open_existing_worktree_max_visible_rows(inner: Rect) -> usize {
-    usize::from(inner.height.saturating_sub(5) / 2)
+    // Reserve top rows (header, search, divider) and bottom rows (workspace
+    // selector, error, buttons) around the two-line worktree entries.
+    usize::from(inner.height.saturating_sub(6) / 2)
 }
 
 pub(crate) fn open_existing_worktree_visible_start(
@@ -229,6 +234,160 @@ pub(crate) fn open_existing_worktree_button_rects(inner: Rect) -> (Rect, Rect) {
     (rects[0], rects[1])
 }
 
+// ---- Workspace target dropdown, shared by the New/Open Worktree dialogs ----
+
+/// Row where the collapsed "workspace" selector sits in the New Worktree dialog:
+/// the fourth content row (header, branch label, branch input, then selector).
+pub(crate) fn new_worktree_target_row_rect(inner: Rect) -> Rect {
+    Rect::new(inner.x, inner.y.saturating_add(3), inner.width, 1)
+}
+
+/// Row where the collapsed "workspace" selector sits in the Open Worktree dialog:
+/// a footer row directly above the error line and action buttons.
+pub(crate) fn open_worktree_target_row_rect(inner: Rect) -> Rect {
+    Rect::new(
+        inner.x,
+        inner.y + inner.height.saturating_sub(3),
+        inner.width,
+        1,
+    )
+}
+
+const WORKTREE_TARGET_DROPDOWN_MAX_ROWS: u16 = 8;
+
+fn worktree_target_dropdown_start(selector: &WorktreeTargetSelector, max_rows: usize) -> usize {
+    if max_rows == 0 {
+        return 0;
+    }
+    let last_start = selector.options.len().saturating_sub(max_rows);
+    selector
+        .selected
+        .saturating_sub(max_rows.saturating_sub(1))
+        .min(last_start)
+}
+
+/// Floating list geometry for the expanded dropdown, anchored to `anchor` and
+/// clamped inside `inner`. Drops downward when there is room below the anchor,
+/// otherwise upward — so the Open dialog's bottom-anchored selector opens up.
+pub(crate) fn worktree_target_dropdown_rect(
+    anchor: Rect,
+    inner: Rect,
+    option_count: usize,
+) -> Rect {
+    let want = (option_count as u16).clamp(1, WORKTREE_TARGET_DROPDOWN_MAX_ROWS);
+    let below = (inner.y + inner.height).saturating_sub(anchor.y.saturating_add(1));
+    let above = anchor.y.saturating_sub(inner.y);
+    if below >= want || below >= above {
+        let height = want.min(below.max(1));
+        Rect::new(anchor.x, anchor.y.saturating_add(1), anchor.width, height)
+    } else {
+        let height = want.min(above.max(1));
+        Rect::new(
+            anchor.x,
+            anchor.y.saturating_sub(height),
+            anchor.width,
+            height,
+        )
+    }
+}
+
+/// The option index at (`x`, `y`) within the expanded dropdown, or `None`.
+pub(crate) fn worktree_target_option_at(
+    anchor: Rect,
+    inner: Rect,
+    selector: &WorktreeTargetSelector,
+    x: u16,
+    y: u16,
+) -> Option<usize> {
+    if !selector.expanded {
+        return None;
+    }
+    let rect = worktree_target_dropdown_rect(anchor, inner, selector.options.len());
+    if x < rect.x || x >= rect.x + rect.width || y < rect.y || y >= rect.y + rect.height {
+        return None;
+    }
+    let start = worktree_target_dropdown_start(selector, rect.height as usize);
+    let index = start + (y - rect.y) as usize;
+    (index < selector.options.len()).then_some(index)
+}
+
+/// Render the collapsed selector row: " workspace  [ <label> ▾ ]". The bracketed
+/// value is highlighted so it reads as a clickable control.
+fn render_worktree_target_row(
+    frame: &mut Frame,
+    row: Rect,
+    selector: &WorktreeTargetSelector,
+    palette: &crate::app::state::Palette,
+) {
+    frame.render_widget(Clear, row);
+    let label = " workspace  ";
+    frame.render_widget(
+        Paragraph::new(label).style(Style::default().fg(palette.overlay0)),
+        row,
+    );
+    let label_width = display_width_u16(label);
+    let caret = if selector.expanded { "▴" } else { "▾" };
+    let value = format!("[ {} {caret} ]", selector.selected_label());
+    let value_rect = Rect::new(
+        row.x.saturating_add(label_width),
+        row.y,
+        row.width.saturating_sub(label_width),
+        1,
+    );
+    frame.render_widget(
+        Paragraph::new(truncate_end(&value, value_rect.width as usize)).style(
+            Style::default()
+                .fg(palette.text)
+                .bg(palette.surface0)
+                .add_modifier(Modifier::BOLD),
+        ),
+        value_rect,
+    );
+}
+
+/// Render the expanded dropdown list floating over the dialog. Call this last so
+/// it draws on top of the other rows.
+fn render_worktree_target_dropdown(
+    frame: &mut Frame,
+    anchor: Rect,
+    inner: Rect,
+    selector: &WorktreeTargetSelector,
+    palette: &crate::app::state::Palette,
+) {
+    if !selector.expanded || selector.options.is_empty() {
+        return;
+    }
+    let rect = worktree_target_dropdown_rect(anchor, inner, selector.options.len());
+    let max_rows = rect.height as usize;
+    let start = worktree_target_dropdown_start(selector, max_rows);
+    frame.render_widget(Clear, rect);
+    for (index, option) in selector
+        .options
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(max_rows)
+    {
+        let y = rect.y + (index - start) as u16;
+        let selected = index == selector.selected;
+        let style = if selected {
+            Style::default()
+                .fg(palette.text)
+                .bg(palette.surface0)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.subtext0).bg(palette.panel_bg)
+        };
+        let marker = if selected { "▸" } else { " " };
+        let line = format!(" {marker} {}", option.label);
+        frame.render_widget(Clear, Rect::new(rect.x, y, rect.width, 1));
+        frame.render_widget(
+            Paragraph::new(truncate_end(&line, rect.width as usize)).style(style),
+            Rect::new(rect.x, y, rect.width, 1),
+        );
+    }
+}
+
 pub(super) fn render_new_linked_worktree_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
     let Some(create) = app.worktree_create.as_ref() else {
         return;
@@ -249,14 +408,14 @@ pub(super) fn render_new_linked_worktree_overlay(app: &AppState, frame: &mut Fra
     }
 
     let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Length(1),
-        Constraint::Min(0),
+        Constraint::Length(1), // 0 header
+        Constraint::Length(1), // 1 branch label
+        Constraint::Length(1), // 2 branch input
+        Constraint::Length(1), // 3 workspace selector
+        Constraint::Length(1), // 4 checkout label
+        Constraint::Length(1), // 5 checkout path
+        Constraint::Length(2), // 6 status/error
+        Constraint::Min(0),    // 7 buttons
     ])
     .areas::<8>(inner);
 
@@ -277,27 +436,29 @@ pub(super) fn render_new_linked_worktree_overlay(app: &AppState, frame: &mut Fra
         input_rect,
     );
 
+    render_worktree_target_row(frame, rows[3], &create.target, &app.palette);
+
     let checkout = create.checkout_path.display().to_string();
     frame.render_widget(
         Paragraph::new(" checkout").style(Style::default().fg(app.palette.overlay0)),
-        rows[3],
+        rows[4],
     );
     frame.render_widget(
         Paragraph::new(format!(" {checkout}")).style(Style::default().fg(app.palette.subtext0)),
-        rows[4],
+        rows[5],
     );
 
     if create.creating {
         frame.render_widget(
             Paragraph::new(" creating…").style(Style::default().fg(app.palette.overlay0)),
-            rows[5],
+            rows[6],
         );
     } else if let Some(error) = &create.error {
         frame.render_widget(
             Paragraph::new(format!(" {error}"))
                 .style(Style::default().fg(app.palette.red))
                 .wrap(Wrap { trim: false }),
-            rows[5],
+            rows[6],
         );
     }
 
@@ -321,6 +482,15 @@ pub(super) fn render_new_linked_worktree_overlay(app: &AppState, frame: &mut Fra
             .fg(app.palette.text)
             .bg(app.palette.surface0)
             .add_modifier(Modifier::BOLD),
+    );
+
+    // Drawn last so the expanded list floats over the rows below the selector.
+    render_worktree_target_dropdown(
+        frame,
+        new_worktree_target_row_rect(inner),
+        inner,
+        &create.target,
+        &app.palette,
     );
 }
 
@@ -407,6 +577,168 @@ pub(super) fn render_remove_worktree_overlay(app: &AppState, frame: &mut Frame, 
         Style::default()
             .fg(panel_contrast_fg(&app.palette))
             .bg(app.palette.red)
+            .add_modifier(Modifier::BOLD),
+    );
+    render_action_button(
+        frame,
+        cancel_rect,
+        Some("esc"),
+        "cancel",
+        Style::default()
+            .fg(app.palette.text)
+            .bg(app.palette.surface0)
+            .add_modifier(Modifier::BOLD),
+    );
+}
+
+pub(crate) fn move_workspace_button_rects(inner: Rect) -> (Rect, Rect) {
+    let rects = action_button_row_rects(
+        inner,
+        &[
+            ActionButtonSpec {
+                hint: Some("↵"),
+                label: "move",
+            },
+            ActionButtonSpec {
+                hint: Some("esc"),
+                label: "cancel",
+            },
+        ],
+        2,
+        inner.height.saturating_sub(1),
+    );
+    (rects[0], rects[1])
+}
+
+/// Clickable regions of the move-to-workspace overlay, mirroring the geometry in
+/// [`render_move_workspace_overlay`] so mouse input hit-tests the same rects.
+pub(crate) struct MoveWorkspaceHitboxes {
+    pub list: Rect,
+    pub move_button: Rect,
+    pub cancel_button: Rect,
+}
+
+pub(crate) fn move_workspace_hitboxes(app: &AppState, area: Rect) -> Option<MoveWorkspaceHitboxes> {
+    let move_state = app.worktree_move.as_ref()?;
+    let height = (move_state.entries.len() as u16)
+        .saturating_add(6)
+        .clamp(9, 24);
+    let popup = centered_popup_rect(area, 56, height)?;
+    let inner = Rect::new(
+        popup.x + 1,
+        popup.y + 1,
+        popup.width.saturating_sub(2),
+        popup.height.saturating_sub(2),
+    );
+    if inner.height < 5 {
+        return None;
+    }
+    let rows = Layout::vertical([
+        Constraint::Length(1), // header
+        Constraint::Length(1), // hint
+        Constraint::Min(1),    // list
+        Constraint::Length(2), // buttons
+    ])
+    .areas::<4>(inner);
+    let (move_button, cancel_button) = move_workspace_button_rects(inner);
+    Some(MoveWorkspaceHitboxes {
+        list: rows[2],
+        move_button,
+        cancel_button,
+    })
+}
+
+/// The entry index at viewport row `y` inside the overlay's list rect, matching the
+/// scroll window in [`render_move_workspace_overlay`]. `None` if `y` is off-list.
+pub(crate) fn move_workspace_entry_at_row(
+    move_state: &crate::app::state::WorktreeMoveState,
+    list: Rect,
+    y: u16,
+) -> Option<usize> {
+    if y < list.y || y >= list.y.saturating_add(list.height) {
+        return None;
+    }
+    let max_rows = list.height as usize;
+    let start = move_state
+        .selected
+        .saturating_sub(max_rows.saturating_sub(1));
+    let index = start + (y - list.y) as usize;
+    (index < move_state.entries.len()).then_some(index)
+}
+
+pub(super) fn render_move_workspace_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
+    let Some(move_state) = app.worktree_move.as_ref() else {
+        return;
+    };
+    super::dim_background(frame, area);
+    let height = (move_state.entries.len() as u16)
+        .saturating_add(6)
+        .clamp(9, 24);
+    let Some(inner) = render_modal_shell(frame, area, 56, height, &app.palette) else {
+        return;
+    };
+    if inner.height < 5 {
+        return;
+    }
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // header
+        Constraint::Length(1), // hint
+        Constraint::Min(1),    // list
+        Constraint::Length(2), // buttons
+    ])
+    .areas::<4>(inner);
+
+    render_modal_header(frame, rows[0], "move to workspace", &app.palette);
+    frame.render_widget(
+        Paragraph::new(" file this worktree under a workspace")
+            .style(Style::default().fg(app.palette.overlay0)),
+        rows[1],
+    );
+
+    let list = rows[2];
+    let max_rows = list.height as usize;
+    let start = move_state
+        .selected
+        .saturating_sub(max_rows.saturating_sub(1));
+    for (row, entry) in move_state
+        .entries
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(max_rows)
+    {
+        let y = list.y + (row - start) as u16;
+        let selected = row == move_state.selected;
+        let style = if selected {
+            Style::default()
+                .fg(app.palette.text)
+                .bg(app.palette.surface0)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(app.palette.subtext0)
+        };
+        frame.render_widget(Clear, Rect::new(list.x, y, list.width, 1));
+        frame.render_widget(
+            Paragraph::new(format!(
+                " {} {}",
+                if selected { "▸" } else { " " },
+                entry.label
+            ))
+            .style(style),
+            Rect::new(list.x, y, list.width, 1),
+        );
+    }
+
+    let (move_rect, cancel_rect) = move_workspace_button_rects(inner);
+    render_action_button(
+        frame,
+        move_rect,
+        Some("↵"),
+        "move",
+        Style::default()
+            .fg(panel_contrast_fg(&app.palette))
+            .bg(app.palette.accent)
             .add_modifier(Modifier::BOLD),
     );
     render_action_button(
@@ -521,6 +853,13 @@ pub(super) fn render_open_existing_worktree_overlay(app: &AppState, frame: &mut 
         );
     }
 
+    render_worktree_target_row(
+        frame,
+        open_worktree_target_row_rect(inner),
+        &open.target,
+        &app.palette,
+    );
+
     if let Some(error) = &open.error {
         frame.render_widget(
             Paragraph::new(format!(" {error}")).style(Style::default().fg(app.palette.red)),
@@ -553,6 +892,15 @@ pub(super) fn render_open_existing_worktree_overlay(app: &AppState, frame: &mut 
             .fg(app.palette.text)
             .bg(app.palette.surface0)
             .add_modifier(Modifier::BOLD),
+    );
+
+    // Drawn last so the expanded list floats over the entry rows above it.
+    render_worktree_target_dropdown(
+        frame,
+        open_worktree_target_row_rect(inner),
+        inner,
+        &open.target,
+        &app.palette,
     );
 }
 
@@ -772,7 +1120,25 @@ mod tests {
     };
     use ratatui::{backend::TestBackend, layout::Rect, Terminal};
 
-    use super::{confirm_close_overlay_text, render_new_linked_worktree_overlay};
+    use super::{
+        confirm_close_overlay_text, render_new_linked_worktree_overlay,
+        worktree_target_dropdown_rect,
+    };
+
+    #[test]
+    fn worktree_target_dropdown_drops_down_or_up_by_available_space() {
+        let inner = Rect::new(0, 0, 40, 12);
+        // Anchored near the top: the list drops downward, below the anchor row.
+        let top_anchor = Rect::new(0, 1, 40, 1);
+        let down = worktree_target_dropdown_rect(top_anchor, inner, 5);
+        assert!(down.y > top_anchor.y, "should open below a top anchor");
+        assert!(down.y + down.height <= inner.y + inner.height);
+        // Anchored near the bottom: the list flips upward so it stays on-screen.
+        let bottom_anchor = Rect::new(0, 9, 40, 1);
+        let up = worktree_target_dropdown_rect(bottom_anchor, inner, 5);
+        assert!(up.y < bottom_anchor.y, "should open above a bottom anchor");
+        assert!(up.y >= inner.y);
+    }
 
     #[test]
     fn confirm_close_text_uses_live_workspace_cwd_label() {
@@ -913,6 +1279,7 @@ mod tests {
                     .into(),
             ),
             creating: false,
+            target: Default::default(),
         });
 
         let mut terminal =

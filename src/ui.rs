@@ -23,8 +23,9 @@ mod text;
 mod widgets;
 
 use self::dialogs::{
-    render_confirm_close_overlay, render_new_linked_worktree_overlay,
-    render_open_existing_worktree_overlay, render_remove_worktree_overlay, render_rename_overlay,
+    render_confirm_close_overlay, render_move_workspace_overlay,
+    render_new_linked_worktree_overlay, render_open_existing_worktree_overlay,
+    render_remove_worktree_overlay, render_rename_overlay,
 };
 use self::keybind_help::render_keybind_help_overlay;
 use self::menus::{
@@ -63,11 +64,13 @@ pub(crate) use self::tab_surface::{
 use self::tabs::render_tab_bar;
 pub(crate) use self::{
     dialogs::{
-        confirm_close_button_rects, confirm_close_popup_rect, new_linked_worktree_button_rects,
-        new_linked_worktree_inner_rect, open_existing_worktree_button_rects,
+        confirm_close_button_rects, confirm_close_popup_rect, move_workspace_entry_at_row,
+        move_workspace_hitboxes, new_linked_worktree_button_rects, new_linked_worktree_inner_rect,
+        new_worktree_target_row_rect, open_existing_worktree_button_rects,
         open_existing_worktree_inner_rect, open_existing_worktree_max_visible_rows,
-        open_existing_worktree_visible_start, remove_worktree_button_rects,
-        remove_worktree_popup_rect, rename_button_rects,
+        open_existing_worktree_visible_start, open_worktree_target_row_rect,
+        remove_worktree_button_rects, remove_worktree_popup_rect, rename_button_rects,
+        worktree_target_option_at,
     },
     settings::{
         settings_button_rects, settings_popup_height, settings_show_primary_action,
@@ -81,7 +84,7 @@ pub(crate) use self::{
         expanded_sidebar_toggle_rect, normalized_workspace_scroll, sidebar_section_divider_rect,
         workspace_drop_indicator_row, workspace_list_entries, workspace_list_entries_expanded,
         workspace_list_rect, workspace_list_scroll_metrics, workspace_list_scrollbar_rect,
-        workspace_parent_group_state, AgentPanelEntry, WorkspaceListEntry,
+        workspace_parent_group_state, workspace_parent_index, AgentPanelEntry, WorkspaceListEntry,
     },
 };
 pub(crate) use self::{
@@ -450,6 +453,7 @@ pub fn render_with_runtime_registry(
             render_open_existing_worktree_overlay(app, frame, frame.area())
         }
         Mode::ConfirmRemoveWorktree => render_remove_worktree_overlay(app, frame, frame.area()),
+        Mode::MoveWorktreeToWorkspace => render_move_workspace_overlay(app, frame, frame.area()),
         Mode::GlobalMenu => render_global_launcher_menu(app, frame),
         Mode::KeybindHelp => render_keybind_help_overlay(app, frame),
         Mode::Navigator => render_navigator_overlay(app, terminal_runtimes, frame),

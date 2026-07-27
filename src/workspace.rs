@@ -157,6 +157,11 @@ pub struct Workspace {
     pub(crate) cached_git_space: Option<GitSpaceMetadata>,
     /// Explicit Herdr-managed worktree grouping provenance.
     pub worktree_space: Option<WorktreeSpaceMembership>,
+    /// Manual sidebar grouping: the workspace this one is filed under. When set,
+    /// this workspace renders nested beneath that parent regardless of git repo.
+    /// `None` = a top-level workspace. Set when a worktree is opened "into" a
+    /// chosen workspace (defaulting to the workspace it was opened from).
+    pub parent_workspace_id: Option<String>,
     pub(crate) metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub(crate) metadata_token_sequences: HashMap<String, u64>,
     /// Public pane numbers within this workspace. Closed pane numbers are not reused.
@@ -218,6 +223,7 @@ impl Workspace {
             cached_git_ahead_behind: None,
             cached_git_space: git_space_metadata(&identity_cwd),
             worktree_space: None,
+            parent_workspace_id: None,
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,
@@ -401,6 +407,7 @@ impl Workspace {
                 cached_git_ahead_behind: None,
                 cached_git_space: None,
                 worktree_space: None,
+                parent_workspace_id: None,
                 metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
                 metadata_token_sequences: HashMap::new(),
                 public_pane_numbers,
@@ -1214,6 +1221,7 @@ impl Workspace {
             cached_git_ahead_behind: None,
             cached_git_space: None,
             worktree_space: None,
+            parent_workspace_id: None,
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,

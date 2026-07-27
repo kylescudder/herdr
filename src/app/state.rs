@@ -633,6 +633,8 @@ pub struct WorktreeCreateState {
     pub checkout_path: std::path::PathBuf,
     pub error: Option<String>,
     pub creating: bool,
+    /// Which workspace the new worktree will be filed under (inline dropdown).
+    pub target: WorktreeTargetSelector,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -695,6 +697,60 @@ impl WorktreeOpenEntry {
     }
 }
 
+/// A candidate destination in the "move worktree to workspace" picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeMoveTarget {
+    /// Target workspace public id, or `None` for "top level" (detach).
+    pub target_id: Option<String>,
+    pub label: String,
+}
+
+/// Picker state for reassigning which workspace a worktree is filed under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeMoveState {
+    /// Public id of the workspace being moved.
+    pub workspace_id: String,
+    pub entries: Vec<WorktreeMoveTarget>,
+    pub selected: usize,
+    pub error: Option<String>,
+}
+
+/// Inline "workspace" dropdown shown in the New/Open Worktree dialogs: the target
+/// workspace the resulting worktree is filed under. Options are "top level" plus
+/// each top-level workspace; the default is the focused workspace's group.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorktreeTargetSelector {
+    pub options: Vec<WorktreeMoveTarget>,
+    pub selected: usize,
+    /// Whether the dropdown list is open (drawn floating over the dialog).
+    pub expanded: bool,
+}
+
+impl WorktreeTargetSelector {
+    pub(crate) fn selected_target_id(&self) -> Option<String> {
+        self.options
+            .get(self.selected)
+            .and_then(|target| target.target_id.clone())
+    }
+
+    pub(crate) fn selected_label(&self) -> &str {
+        self.options
+            .get(self.selected)
+            .map(|target| target.label.as_str())
+            .unwrap_or("top level")
+    }
+
+    pub(crate) fn select_up(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub(crate) fn select_down(&mut self) {
+        if self.selected + 1 < self.options.len() {
+            self.selected += 1;
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeOpenState {
     pub source_workspace_id: String,
@@ -708,6 +764,8 @@ pub struct WorktreeOpenState {
     pub query: String,
     pub search_focused: bool,
     pub error: Option<String>,
+    /// Which workspace the opened worktree will be filed under (inline dropdown).
+    pub target: WorktreeTargetSelector,
 }
 
 impl WorktreeOpenState {
@@ -804,6 +862,7 @@ pub enum Mode {
     NewLinkedWorktree,
     OpenExistingWorktree,
     ConfirmRemoveWorktree,
+    MoveWorktreeToWorkspace,
     Resize,
     ConfirmClose,
     ContextMenu,
@@ -1228,7 +1287,7 @@ pub struct ContextMenuState {
 impl ContextMenuState {
     pub fn items(&self) -> &'static [&'static str] {
         match self.kind {
-            ContextMenuKind::Workspace { .. } => &["Rename", "Close"],
+            ContextMenuKind::Workspace { .. } => &["Rename", "Close", "Move to workspace..."],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: false,
@@ -1237,7 +1296,14 @@ impl ContextMenuState {
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: true,
                 ..
-            } => &["Rename", "Close", "Delete worktree checkout..."],
+            } => &[
+                "Rename",
+                "Close",
+                "New worktree",
+                "Open worktree...",
+                "Move to workspace...",
+                "Delete worktree checkout...",
+            ],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: true,
@@ -1424,6 +1490,7 @@ pub struct AppState {
     pub request_open_existing_worktree: Option<usize>,
     pub request_new_workspace_cwd: Option<std::path::PathBuf>,
     pub request_remove_linked_worktree: Option<usize>,
+    pub request_move_workspace: Option<usize>,
     pub request_submit_worktree_create: bool,
     pub request_submit_worktree_open: bool,
     pub request_submit_worktree_remove: bool,
@@ -1440,6 +1507,7 @@ pub struct AppState {
     pub rename_pane_target: Option<PaneId>,
     pub worktree_create: Option<WorktreeCreateState>,
     pub worktree_open: Option<WorktreeOpenState>,
+    pub worktree_move: Option<WorktreeMoveState>,
     pub worktree_remove: Option<WorktreeRemoveState>,
     pub worktree_directory: std::path::PathBuf,
     pub collapsed_space_keys: std::collections::HashSet<String>,
@@ -1591,6 +1659,44 @@ pub struct AppState {
 impl AppState {
     pub(crate) fn mark_session_dirty(&mut self) {
         self.session_dirty = true;
+    }
+
+    /// Commit the pending move-to-workspace selection: file the chosen workspace
+    /// under the selected parent (or top level when the parent is `None`), then
+    /// close the picker. Shared by the keyboard and mouse paths.
+    pub(crate) fn apply_move_workspace(&mut self) {
+        let Some(move_state) = self.worktree_move.as_ref() else {
+            return;
+        };
+        let Some(target) = move_state.entries.get(move_state.selected).cloned() else {
+            self.cancel_move_workspace();
+            return;
+        };
+        let workspace_id = move_state.workspace_id.clone();
+        let mut changed = false;
+        // Never file a workspace under itself.
+        if target.target_id.as_deref() != Some(workspace_id.as_str()) {
+            if let Some(ws) = self.workspaces.iter_mut().find(|ws| ws.id == workspace_id) {
+                if ws.parent_workspace_id != target.target_id {
+                    ws.parent_workspace_id = target.target_id;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.mark_session_dirty();
+        }
+        self.cancel_move_workspace();
+    }
+
+    /// Dismiss the move-to-workspace picker without changing any grouping.
+    pub(crate) fn cancel_move_workspace(&mut self) {
+        self.worktree_move = None;
+        self.mode = if self.active.is_some() {
+            Mode::Terminal
+        } else {
+            Mode::Navigate
+        };
     }
 
     pub(crate) fn remove_alias_shadowed_by_new_pane(&mut self, pane_id: PaneId) {
@@ -1798,6 +1904,7 @@ impl AppState {
             request_open_existing_worktree: None,
             request_new_workspace_cwd: None,
             request_remove_linked_worktree: None,
+            request_move_workspace: None,
             request_submit_worktree_create: false,
             request_submit_worktree_open: false,
             request_submit_worktree_remove: false,
@@ -1810,6 +1917,7 @@ impl AppState {
             rename_pane_target: None,
             worktree_create: None,
             worktree_open: None,
+            worktree_move: None,
             worktree_remove: None,
             worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             collapsed_space_keys: std::collections::HashSet::new(),
@@ -2472,7 +2580,14 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "Delete worktree checkout..."]
+            &[
+                "Rename",
+                "Close",
+                "New worktree",
+                "Open worktree...",
+                "Move to workspace...",
+                "Delete worktree checkout..."
+            ]
         );
     }
 

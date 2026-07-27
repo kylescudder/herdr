@@ -182,6 +182,8 @@ impl App {
             repo_name: source.repo_name,
             label: params.label,
             focus: params.focus,
+            target_workspace_id: params.target_workspace_id,
+            target_workspace_specified: params.target_workspace_specified,
             respond_to,
         };
         let path = checkout_path;
@@ -422,6 +424,35 @@ impl App {
             true,
             !created_workspace,
         );
+        // File the new worktree for sidebar grouping. Invoked from the repo-root
+        // workspace it nests beneath it; invoked from within a linked worktree it
+        // joins that worktree's group (inherits its explicit parent, or top level
+        // when the worktree has no explicit parent).
+        if created_workspace {
+            let parent_id = if api.target_workspace_specified {
+                // Explicit choice from the dialog: Some => file under that
+                // workspace; None => top level. Resolve/validate the id.
+                api.target_workspace_id.as_deref().and_then(|pid| {
+                    self.parse_workspace_id(pid)
+                        .and_then(|idx| self.state.workspaces.get(idx))
+                        .map(|ws| ws.id.clone())
+                })
+            } else {
+                self.worktree_filing_parent(api.source_workspace_id.as_deref())
+            };
+            if let Some(parent_id) = parent_id {
+                let is_self = self
+                    .state
+                    .workspaces
+                    .get(ws_idx)
+                    .is_some_and(|ws| ws.id == parent_id);
+                if !is_self {
+                    if let Some(ws) = self.state.workspaces.get_mut(ws_idx) {
+                        ws.parent_workspace_id = Some(parent_id);
+                    }
+                }
+            }
+        }
         if let Some(label) = api.label {
             if let Some(ws) = self.state.workspaces.get_mut(ws_idx) {
                 ws.set_custom_name(label);

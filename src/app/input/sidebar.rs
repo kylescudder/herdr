@@ -1219,7 +1219,10 @@ mod tests {
 
         assert_eq!(app.state.active, None);
         assert!(app.state.workspace_press.is_none());
-        assert!(app.state.collapsed_space_keys.contains("repo-key"));
+        assert!(app
+            .state
+            .collapsed_space_keys
+            .contains(app.state.workspaces[0].id.as_str()));
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -1227,7 +1230,10 @@ mod tests {
             parent.y,
         ));
 
-        assert!(!app.state.collapsed_space_keys.contains("repo-key"));
+        assert!(!app
+            .state
+            .collapsed_space_keys
+            .contains(app.state.workspaces[0].id.as_str()));
     }
 
     #[test]
