@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## [0.8.0] - 2026-07-27
+
+### Added
+- Worktrees can be filed under a top-level workspace of your choosing via a new `parent_workspace_id`, instead of always grouping by the shared git repository. Sidebar grouping is hybrid: an explicit parent wins, otherwise it falls back to the historic git-key grouping.
+- Added a "move to workspace" picker (default keybind `prefix+shift+m`, plus a "Move to workspace..." context-menu entry) to reparent an existing workspace under another top-level workspace, or back to top level.
+- The New/Open Worktree dialogs now include a `workspace:` target selector to choose which top-level workspace the worktree is filed under up front.
+- New Worktree and Open Worktree actions are now available from within a linked worktree, filing the result under that worktree's parent.
+
+### Changed
+- Wire protocol bumped to 19; client and server must be on matching protocol versions.
+
 ## [0.7.5] - 2026-07-21
 
 ### Breaking Changes
