@@ -2464,8 +2464,22 @@ fn ghostty_extract_selection(
     selection: &crate::selection::Selection,
 ) -> Result<String, crate::ghostty::Error> {
     let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
-    core.terminal
-        .read_text_screen((start_col, start_row), (end_col, end_row), false)
+
+    // A selection stores absolute screen-buffer rows captured during the mouse
+    // gesture. By the time we read the text, the pane's buffer may have changed
+    // (new output, a clear/reset, or a resize/reflow), so those rows or columns
+    // can now fall outside the live grid. ghostty resolves an out-of-range
+    // screen point to a null pin, which surfaces here as an error and, upstream,
+    // an empty copy: the selection highlights but nothing reaches the clipboard
+    // and no "copied" toast appears. Clamp to the current grid bounds so a stale
+    // selection still yields its closest valid text instead of nothing. In-range
+    // selections are unaffected because the clamp is a no-op for them.
+    let last_row = u32::try_from(core.terminal.total_rows()?.saturating_sub(1)).unwrap_or(u32::MAX);
+    let last_col = core.terminal.cols()?.saturating_sub(1);
+    let start = (start_col.min(last_col), start_row.min(last_row));
+    let end = (end_col.min(last_col), end_row.min(last_row));
+
+    core.terminal.read_text_screen(start, end, false)
 }
 
 fn ghostty_screen_row(
@@ -4374,6 +4388,38 @@ mod tests {
             .extract_selection(&selection)
             .expect("selection should extract text");
         assert_eq!(text, "000003\n000004\n000005");
+    }
+
+    #[test]
+    fn extract_selection_clamps_stale_out_of_range_rows() {
+        // Reproduces the "selection highlights but nothing copies" bug: a
+        // selection captured against a larger buffer (e.g. before a clear,
+        // reset, or reflow shrank the scrollback) stores absolute screen rows
+        // that now exceed the live grid. Without clamping, ghostty returns a
+        // null pin and extraction yields None (no clipboard write, no toast).
+        let (tx, _rx) = mpsc::channel(4);
+        let mut terminal = crate::ghostty::Terminal::new(8, 3, 1024).unwrap();
+        write_numbered_lines(&mut terminal, 8);
+        // Leave text (no trailing newline) on the final buffer row so the
+        // clamped read lands on populated content.
+        terminal.write(b"LAST");
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+
+        // Metrics claiming far more scrollback than the buffer actually has,
+        // as if the buffer shrank after the gesture was recorded.
+        let stale_metrics = ScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 100_000,
+            viewport_rows: 3,
+        };
+        let mut selection =
+            crate::selection::Selection::anchor(PaneId::from_raw(1), 0, 0, Some(stale_metrics));
+        selection.drag(7, 2, Rect::new(0, 0, 8, 3), Some(stale_metrics));
+
+        let text = pane
+            .extract_selection(&selection)
+            .expect("stale selection should clamp to the live grid, not return None");
+        assert!(!text.is_empty());
     }
 
     #[test]
