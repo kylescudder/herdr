@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.8.1] - 2026-07-28
+
+### Fixed
+- Copying a mouse selection from a pane with scrollback (for example long-running command output) no longer silently copies nothing. The stored selection coordinates are now clamped to the terminal's live grid before reading, so a selection that went stale when the buffer changed (new output, a clear/reset, or a reflow) still yields its closest valid text instead of an empty read that showed no "copied to clipboard" toast.
+
 ## [0.8.0] - 2026-07-27
 
 ### Added
