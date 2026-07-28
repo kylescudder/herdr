@@ -1338,6 +1338,21 @@ pub(crate) enum NavigateAction {
     OpenNavigator,
 }
 
+impl NavigateAction {
+    /// Whether this action moves pane focus in a direction (as opposed to
+    /// swapping panes, switching tabs, etc.). Used to gate tmux-navigator style
+    /// pane-focus passthrough to editor panes.
+    pub(crate) fn is_focus_pane_direction(self) -> bool {
+        matches!(
+            self,
+            NavigateAction::FocusPaneLeft
+                | NavigateAction::FocusPaneDown
+                | NavigateAction::FocusPaneUp
+                | NavigateAction::FocusPaneRight
+        )
+    }
+}
+
 fn copy_mode_survives_prefix_action(action: NavigateAction) -> bool {
     matches!(
         action,

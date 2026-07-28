@@ -266,6 +266,26 @@ fn parse_cjk_ime_agents(names: &[String]) -> Vec<crate::detect::Agent> {
     out
 }
 
+/// Normalize configured `smart_pane_focus_editors` entries into lowercase
+/// executable basenames for matching against a pane's foreground process.
+/// Strips any directory prefix, lowercases, drops blanks, and de-duplicates so
+/// a path like `/usr/bin/NVIM` and a bare `nvim` collapse to one entry.
+fn normalize_editor_names(names: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(names.len());
+    for name in names {
+        let base = name
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(name)
+            .trim()
+            .to_lowercase();
+        if !base.is_empty() && !out.contains(&base) {
+            out.push(base);
+        }
+    }
+    out
+}
+
 fn normalize_theme_name(name: &str) -> String {
     name.to_lowercase().replace([' ', '_'], "-")
 }
@@ -652,6 +672,9 @@ impl App {
             switch_ascii_input_source_in_prefix: config
                 .experimental
                 .switch_ascii_input_source_in_prefix,
+            smart_pane_focus_editors: normalize_editor_names(
+                &config.experimental.smart_pane_focus_editors,
+            ),
             kitty_graphics_enabled: config.experimental.kitty_graphics,
             default_shell: config.terminal.default_shell.clone(),
             shell_mode: config.terminal.shell_mode,
@@ -1489,6 +1512,8 @@ impl App {
                 config.experimental.cjk_ime_cursor_shape.to_decscusr();
             self.state.switch_ascii_input_source_in_prefix =
                 config.experimental.switch_ascii_input_source_in_prefix;
+            self.state.smart_pane_focus_editors =
+                normalize_editor_names(&config.experimental.smart_pane_focus_editors);
             self.persist_pane_history = config.experimental.pane_history;
             self.state.pane_history_persistence = config.experimental.pane_history;
             if !self.persist_pane_history {
@@ -1832,6 +1857,23 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::Mutex;
+
+    #[test]
+    fn normalize_editor_names_basenames_lowercases_and_dedupes() {
+        let input = vec![
+            "nvim".to_string(),
+            "/usr/bin/NVIM".to_string(), // duplicate after basename+lowercase
+            "  Vim  ".to_string(),       // trimmed + lowercased
+            "C:\\tools\\view".to_string(),
+            String::new(),     // dropped
+            "   ".to_string(), // dropped (blank after trim)
+        ];
+        assert_eq!(
+            normalize_editor_names(&input),
+            vec!["nvim".to_string(), "vim".to_string(), "view".to_string(),]
+        );
+        assert!(normalize_editor_names(&[]).is_empty());
+    }
 
     fn raw_key(
         code: KeyCode,
