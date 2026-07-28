@@ -110,3 +110,47 @@ A few `ctrl+alt` chords are taken elsewhere. Avoid these:
 | `ctrl+alt+f1..f12` | Linux virtual console switching |
 
 If a direct chord does nothing, your terminal or desktop environment consumed it before Herdr could see it. Rebind either side: free the chord in the terminal's settings, or pick another chord in Herdr.
+
+**tmux-navigator style pane focus.** If you bind pane focus to bare `ctrl` chords, editors like Vim and Neovim want those same keys for their own splits, and Herdr would swallow them first. Set `experimental.smart_pane_focus_editors` to the editors you use, and Herdr forwards a direct pane-focus key to the pane whenever its foreground process matches, instead of switching Herdr panes:
+
+```toml
+[keys]
+focus_pane_left = "ctrl+h"
+focus_pane_down = "ctrl+j"
+focus_pane_up = "ctrl+k"
+focus_pane_right = "ctrl+l"
+
+[experimental]
+smart_pane_focus_editors = ["nvim", "vim", "vi", "view", "vimdiff"]
+```
+
+Now `ctrl+h`/`j`/`k`/`l` move between splits inside the editor and between Herdr panes everywhere else. Matching is case-insensitive on the process executable basename, so a full path or a wrapped launch still resolves. Leave the list empty (the default) to disable the behavior.
+
+For seamless crossing at a split's outer edge — from the editor's last split into the adjacent Herdr pane — pair it with an editor mapping that hands off to `herdr pane focus` when the editor has no split in that direction. For Neovim:
+
+```lua
+-- Register on VimEnter so these win over any navigator plugin's own <C-hjkl>
+-- mappings (e.g. vim-tmux-navigator), which run at startup.
+vim.api.nvim_create_autocmd("VimEnter", {
+  callback = function()
+    local function nav(win_dir, herdr_dir)
+      return function()
+        local prev = vim.api.nvim_get_current_win()
+        vim.cmd.wincmd(win_dir)
+        if vim.api.nvim_get_current_win() == prev then
+          -- No split that way: hand off to the neighbouring Herdr pane.
+          vim.system({ "herdr", "pane", "focus", "--direction", herdr_dir, "--current" })
+        end
+      end
+    end
+    for key, m in pairs({ ["<C-h>"] = { "h", "left" }, ["<C-j>"] = { "j", "down" },
+                          ["<C-k>"] = { "k", "up" },   ["<C-l>"] = { "l", "right" } }) do
+      vim.keymap.set("n", key, nav(m[1], m[2]), { desc = "Herdr nav " .. m[2] })
+    end
+  end,
+})
+```
+
+If you already use `christoomey/vim-tmux-navigator`, it maps `<C-hjkl>` to `TmuxNavigate*`, which only moves Neovim windows (there is no `$TMUX` under Herdr) and never hands off. Replace those mappings with the above, or set `vim.g.tmux_navigator_no_mappings = 1` so its defaults do not fight yours.
+
+`ctrl+h` only reaches the editor as a distinct key when a modern keyboard protocol is active (Neovim 0.10+ enables it automatically in a supporting terminal); otherwise the terminal folds `ctrl+h` into Backspace. `herdr pane focus --current` reads the `HERDR_PANE_ID` that Herdr exports into every pane.

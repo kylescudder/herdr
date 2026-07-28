@@ -921,6 +921,15 @@ pub struct ExperimentalConfig {
     /// source when prefix mode exits. macOS only; a no-op elsewhere and a
     /// best-effort no-op if the switch fails. Default: false.
     pub switch_ascii_input_source_in_prefix: bool,
+    /// tmux-navigator style pane focus. When a *direct* pane-focus keybinding
+    /// (for example `focus_pane_left = "ctrl+h"`) is pressed while the focused
+    /// pane's foreground process is one of these editors, the key is forwarded
+    /// to the pane so the editor's own window/split navigation works, instead of
+    /// switching Herdr panes. Matched case-insensitively against the process
+    /// executable basename (e.g. "nvim", "vim"). Empty disables the behavior.
+    /// Pair it with an editor plugin that hands off to `herdr pane focus` at a
+    /// split edge for seamless cross-pane navigation. Default: empty.
+    pub smart_pane_focus_editors: Vec<String>,
 }
 
 impl Default for KeysConfig {
@@ -1330,6 +1339,25 @@ switch_ascii_input_source_in_prefix = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.experimental.switch_ascii_input_source_in_prefix);
+    }
+
+    #[test]
+    fn smart_pane_focus_editors_default_empty_and_parse() {
+        let default_config = Config::default();
+        assert!(default_config
+            .experimental
+            .smart_pane_focus_editors
+            .is_empty());
+
+        let toml = r#"
+[experimental]
+smart_pane_focus_editors = ["nvim", "vim"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            config.experimental.smart_pane_focus_editors,
+            vec!["nvim".to_string(), "vim".to_string()]
+        );
     }
 
     #[test]

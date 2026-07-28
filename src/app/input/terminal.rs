@@ -27,6 +27,23 @@ fn is_modifier_only_key(code: &KeyCode) -> bool {
     matches!(code, KeyCode::Modifier(_))
 }
 
+/// Whether a foreground process command (`argv0` or process name, possibly a
+/// full path) matches one of the configured `smart_pane_focus_editors`. The
+/// editor list is already lowercased basenames (see `normalize_editor_names`);
+/// here we reduce the process candidate to its lowercase basename too so both
+/// `/opt/homebrew/bin/nvim` and `NVIM` match a configured `nvim`.
+fn candidate_matches_editor(candidate: &str, editors: &[String]) -> bool {
+    if editors.is_empty() {
+        return false;
+    }
+    let base = candidate
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(candidate)
+        .to_lowercase();
+    editors.contains(&base)
+}
+
 impl App {
     pub(crate) fn handle_terminal_key_headless(
         &mut self,
@@ -51,6 +68,36 @@ impl App {
         sent.then_some(input.target)
     }
 
+    /// Whether the focused pane's foreground process is one of the configured
+    /// `smart_pane_focus_editors`. When true, a direct pane-focus key is
+    /// forwarded to the pane (tmux-navigator style) instead of switching Herdr
+    /// panes. Returns false when the feature is disabled (empty list) so we skip
+    /// the process-table lookup on the common path.
+    fn focused_pane_runs_smart_nav_editor(&self) -> bool {
+        if self.state.smart_pane_focus_editors.is_empty() {
+            return false;
+        }
+        let Some(ws_idx) = self.state.active else {
+            return false;
+        };
+        let Some(runtime) = self
+            .state
+            .focused_runtime_in_workspace(&self.terminal_runtimes, ws_idx)
+        else {
+            return false;
+        };
+        let Some(pid) = runtime.child_pid() else {
+            return false;
+        };
+        let Some(job) = crate::detect::foreground_job(pid) else {
+            return false;
+        };
+        job.processes.iter().any(|process| {
+            let candidate = process.argv0.as_deref().unwrap_or(&process.name);
+            candidate_matches_editor(candidate, &self.state.smart_pane_focus_editors)
+        })
+    }
+
     fn prepare_terminal_key_forward(&mut self, key: TerminalKey) -> Option<PreparedPaneInput> {
         self.state.clear_selection();
         self.selection_autoscroll_deadline = None;
@@ -60,19 +107,35 @@ impl App {
 
         if let Some(action) = super::terminal_direct_non_indexed_navigation_action(&self.state, key)
         {
-            debug!(
-                code = ?key_event.code,
-                modifiers = ?key_event.modifiers,
-                kind = ?key_event.kind,
-                action = ?action,
-                "intercepted terminal direct keybinding before forwarding to pane"
-            );
-            if action == super::navigate::NavigateAction::EditScrollback {
-                self.launch_focused_scrollback_editor();
+            // tmux-navigator style: when a direct pane-focus key is pressed while
+            // the focused pane runs an editor (nvim/vim/...), forward the key to
+            // the pane so the editor's own split navigation works instead of
+            // switching Herdr panes. All other direct actions stay intercepted.
+            if action.is_focus_pane_direction() && self.focused_pane_runs_smart_nav_editor() {
+                debug!(
+                    code = ?key_event.code,
+                    modifiers = ?key_event.modifiers,
+                    action = ?action,
+                    "forwarding pane-focus key to editor pane (smart pane navigation)"
+                );
             } else {
-                self.execute_tui_navigate_action(action, super::navigate::ActionContext::Direct);
+                debug!(
+                    code = ?key_event.code,
+                    modifiers = ?key_event.modifiers,
+                    kind = ?key_event.kind,
+                    action = ?action,
+                    "intercepted terminal direct keybinding before forwarding to pane"
+                );
+                if action == super::navigate::NavigateAction::EditScrollback {
+                    self.launch_focused_scrollback_editor();
+                } else {
+                    self.execute_tui_navigate_action(
+                        action,
+                        super::navigate::ActionContext::Direct,
+                    );
+                }
+                return None;
             }
-            return None;
         }
 
         if let Some(binding) = super::navigate::command_for_key(
@@ -385,6 +448,36 @@ mod tests {
     use super::super::{unique_temp_path, wait_for_file};
     use super::*;
     use crate::{config::Config, events::AppEvent, workspace::Workspace};
+
+    #[test]
+    fn candidate_matches_editor_uses_lowercased_basename() {
+        let editors = vec!["nvim".to_string(), "vim".to_string()];
+        // Bare name, full path, backslash path, and mixed case all match.
+        assert!(candidate_matches_editor("nvim", &editors));
+        assert!(candidate_matches_editor("/opt/homebrew/bin/nvim", &editors));
+        assert!(candidate_matches_editor("C:\\tools\\NVIM", &editors));
+        assert!(candidate_matches_editor("NVIM", &editors));
+        assert!(candidate_matches_editor("/usr/bin/vim", &editors));
+        // Non-editors and substrings do not match.
+        assert!(!candidate_matches_editor("bash", &editors));
+        assert!(!candidate_matches_editor("nvimserver", &editors));
+        assert!(!candidate_matches_editor("/usr/bin/less", &editors));
+        // Empty editor list disables matching entirely.
+        assert!(!candidate_matches_editor("nvim", &[]));
+    }
+
+    #[test]
+    fn focus_pane_direction_predicate_is_scoped_to_focus_actions() {
+        use super::super::navigate::NavigateAction;
+        assert!(NavigateAction::FocusPaneLeft.is_focus_pane_direction());
+        assert!(NavigateAction::FocusPaneDown.is_focus_pane_direction());
+        assert!(NavigateAction::FocusPaneUp.is_focus_pane_direction());
+        assert!(NavigateAction::FocusPaneRight.is_focus_pane_direction());
+        // Swap and other actions must never trigger editor passthrough.
+        assert!(!NavigateAction::SwapPaneLeft.is_focus_pane_direction());
+        assert!(!NavigateAction::NextTab.is_focus_pane_direction());
+        assert!(!NavigateAction::Zoom.is_focus_pane_direction());
+    }
 
     #[cfg(unix)]
     fn app_with_spawned_workspace() -> App {

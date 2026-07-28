@@ -1594,6 +1594,12 @@ pub struct AppState {
     /// CJK IME is active. macOS only; a no-op elsewhere. See
     /// `[experimental] switch_ascii_input_source_in_prefix`.
     pub switch_ascii_input_source_in_prefix: bool,
+    /// Editor process basenames (lowercased) for tmux-navigator style pane
+    /// focus. When a direct pane-focus key is pressed while the focused pane
+    /// runs one of these, the key is forwarded to the pane instead of switching
+    /// Herdr panes. Empty disables the behavior. See
+    /// `[experimental] smart_pane_focus_editors`.
+    pub smart_pane_focus_editors: Vec<String>,
     pub kitty_graphics_enabled: bool,
     pub default_shell: String,
     pub shell_mode: crate::config::ShellModeConfig,
@@ -2001,6 +2007,7 @@ impl AppState {
             cjk_ime_agents: Vec::new(),
             cjk_ime_cursor_shape: 2, // steady_block
             switch_ascii_input_source_in_prefix: false,
+            smart_pane_focus_editors: Vec::new(),
             kitty_graphics_enabled: false,
             default_shell: String::new(),
             shell_mode: crate::config::ShellModeConfig::Auto,

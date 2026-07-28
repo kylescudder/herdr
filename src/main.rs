@@ -400,6 +400,11 @@ pane_history = false
 # even when a CJK IME is active, then restore the previous input source
 # when prefix mode exits. macOS only; best-effort. Default: false.
 # switch_ascii_input_source_in_prefix = false
+# tmux-navigator style pane focus. When a direct pane-focus key (e.g.
+# focus_pane_left = "ctrl+h") is pressed while the focused pane runs one of
+# these editors, forward the key to the pane so the editor's own split
+# navigation works instead of switching Herdr panes. Empty disables it.
+# smart_pane_focus_editors = ["nvim", "vim", "vi", "view", "vimdiff"]
 # Expose the focused pane's cursor to the outer terminal so macOS input
 # methods keep tracking the candidate window when TUIs paint their own
 # cursor (Claude Code, pi, codex). Trade-off: extra cursor visible for
