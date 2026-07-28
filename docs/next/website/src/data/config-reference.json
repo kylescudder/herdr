@@ -236,6 +236,12 @@
           "description": "Create a Git worktree from the selected workspace."
         },
         {
+          "key": "keys.move_worktree",
+          "type": "keybinding",
+          "default": "\"prefix+shift+m\"",
+          "description": "Move the selected worktree under another workspace."
+        },
+        {
           "key": "keys.open_worktree",
           "type": "keybinding",
           "default": "unset",
