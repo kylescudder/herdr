@@ -2,19 +2,29 @@
 
 ## Unreleased
 
+## [0.8.2] - 2026-07-28
+
 ### Added
 - Added `experimental.smart_pane_focus_editors`: when a direct pane-focus key (e.g. `focus_pane_left = "ctrl+h"`) is pressed while the focused pane runs a listed editor (vim/nvim/...), Herdr forwards the key to the pane so the editor's own split navigation works instead of switching panes. Pair it with an editor mapping that hands off to `herdr pane focus` at a split edge for tmux-navigator style movement.
 
 ### Changed
 - Relicensed Herdr from AGPL-3.0-or-later to Apache-2.0.
 
+## [0.8.1] - 2026-07-28
+
 ### Fixed
-- Pane and agent read responses now report `truncated: true` when older terminal rows were omitted. (#1717)
-- Pane applications that query OSC 4 palette colors now inherit the host terminal palette. (#1752)
-- Ctrl-clicking a pane URL no longer forwards an unmatched mouse release to alternate-screen applications, preventing duplicate browser tabs. (#1761)
-- Known-agent integrations now leave pane ownership to confirmed process exit, so restarting Pi with the same saved session restores lifecycle state even with custom working UI. (#1792)
-- OMP integration install, status, and uninstall now respect `PI_CONFIG_DIR` when `PI_CODING_AGENT_DIR` is not set, and installation refuses extension-directory collisions with Pi. (#1696)
-- Physical Escape key records on native Windows now bypass raw VT report framing, so pane applications receive Escape immediately and reliably. (#1736)
+- Copying a mouse selection from a pane with scrollback (for example long-running command output) no longer silently copies nothing. The stored selection coordinates are now clamped to the terminal's live grid before reading, so a selection that went stale when the buffer changed (new output, a clear/reset, or a reflow) still yields its closest valid text instead of an empty read that showed no "copied to clipboard" toast.
+
+## [0.8.0] - 2026-07-27
+
+### Added
+- Worktrees can be filed under a top-level workspace of your choosing via a new `parent_workspace_id`, instead of always grouping by the shared git repository. Sidebar grouping is hybrid: an explicit parent wins, otherwise it falls back to the historic git-key grouping.
+- Added a "move to workspace" picker (default keybind `prefix+shift+m`, plus a "Move to workspace..." context-menu entry) to reparent an existing workspace under another top-level workspace, or back to top level.
+- The New/Open Worktree dialogs now include a `workspace:` target selector to choose which top-level workspace the worktree is filed under up front.
+- New Worktree and Open Worktree actions are now available from within a linked worktree, filing the result under that worktree's parent.
+
+### Changed
+- Wire protocol bumped to 19; client and server must be on matching protocol versions.
 
 ## [0.7.5] - 2026-07-21
 

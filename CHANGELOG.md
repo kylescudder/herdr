@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.8.2] - 2026-07-28
+
+### Added
+- Added `experimental.smart_pane_focus_editors`: when a direct pane-focus key (e.g. `focus_pane_left = "ctrl+h"`) is pressed while the focused pane runs a listed editor (vim/nvim/...), Herdr forwards the key to the pane so the editor's own split navigation works instead of switching panes. Pair it with an editor mapping that hands off to `herdr pane focus` at a split edge for tmux-navigator style movement.
+
+### Changed
+- Relicensed Herdr from AGPL-3.0-or-later to Apache-2.0.
+
 ## [0.8.1] - 2026-07-28
 
 ### Fixed
