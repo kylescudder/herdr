@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.8.3] - 2026-07-29
+
+### Fixed
+- The move-to-workspace picker and the New/Open Worktree "workspace" selector no longer offer linked worktrees as parents (a worktree checkout is never a valid parent, even when it is ungrouped) and no longer list duplicate rows for workspaces that render the same label. Destination rows now read identically to the sidebar.
+
 ## [0.8.2] - 2026-07-28
 
 ### Added
