@@ -65,28 +65,67 @@ impl App {
         ))
     }
 
+    /// Build the "file under a workspace" destination list shared by the New/Open
+    /// Worktree selector and the move-to-workspace picker: "top level" (detach)
+    /// followed by every workspace that is a valid parent.
+    ///
+    /// A valid parent is a top-level *space*. That excludes:
+    /// - workspaces already filed under a parent (explicit or git-repo grouping),
+    ///   keeping the sidebar two levels deep;
+    /// - linked worktrees, which are task checkouts, never spaces — even when a
+    ///   worktree is ungrouped (no root workspace for its repo) and therefore
+    ///   sits at the top level, filing another worktree under it makes no sense;
+    /// - workspaces that render a label already present, so the picker never
+    ///   shows indistinguishable duplicate rows (two checkouts of the same
+    ///   repo/dir derive the same display name).
+    ///
+    /// `exclude_ws_idx` drops the workspace being moved (it cannot be filed under
+    /// itself).
+    fn worktree_move_targets(
+        &self,
+        exclude_ws_idx: Option<usize>,
+    ) -> Vec<crate::app::state::WorktreeMoveTarget> {
+        let mut targets = vec![crate::app::state::WorktreeMoveTarget {
+            target_id: None,
+            label: "top level".into(),
+        }];
+        let mut seen_labels = std::collections::HashSet::new();
+        for (idx, ws) in self.state.workspaces.iter().enumerate() {
+            if Some(idx) == exclude_ws_idx {
+                continue;
+            }
+            if crate::ui::workspace_parent_index(&self.state, ws).is_some() {
+                continue;
+            }
+            if ws
+                .worktree_space()
+                .is_some_and(|space| space.is_linked_worktree)
+            {
+                continue;
+            }
+            // Use the same label source as the sidebar (live cwd, not the fixed
+            // identity) so picker rows read identically to what the user sees and
+            // so workspaces that render the same label collapse to one row.
+            let label = ws.display_name_from(&self.state.terminals, &self.terminal_runtimes);
+            if !seen_labels.insert(label.clone()) {
+                continue;
+            }
+            targets.push(crate::app::state::WorktreeMoveTarget {
+                target_id: Some(ws.id.clone()),
+                label,
+            });
+        }
+        targets
+    }
+
     /// Build the "workspace" dropdown for the New/Open Worktree dialogs: options
-    /// are "top level" plus every top-level workspace, defaulting to the group the
-    /// focused workspace belongs to (itself if it is top-level, else its parent).
+    /// are "top level" plus every valid parent workspace, defaulting to the group
+    /// the focused workspace belongs to (itself if it is top-level, else its parent).
     pub(crate) fn build_worktree_target_selector(
         &self,
         focused_ws_idx: usize,
     ) -> crate::app::state::WorktreeTargetSelector {
-        let mut options = vec![crate::app::state::WorktreeMoveTarget {
-            target_id: None,
-            label: "top level".into(),
-        }];
-        for ws in self.state.workspaces.iter() {
-            // Only top-level workspaces are valid filing targets (keeps the sidebar
-            // two levels deep, matching the move-to-workspace picker).
-            if crate::ui::workspace_parent_index(&self.state, ws).is_some() {
-                continue;
-            }
-            options.push(crate::app::state::WorktreeMoveTarget {
-                target_id: Some(ws.id.clone()),
-                label: ws.display_name(),
-            });
-        }
+        let options = self.worktree_move_targets(None);
         let default_target_id = self.state.workspaces.get(focused_ws_idx).and_then(|ws| {
             if ws
                 .worktree_space()
@@ -274,21 +313,9 @@ impl App {
         };
         let workspace_id = ws.id.clone();
         let current_parent = ws.parent_workspace_id.clone();
-        // Destinations: "top level" plus every OTHER top-level workspace. Only
-        // top-level workspaces are valid parents (keeps the sidebar 2 levels).
-        let mut entries = vec![crate::app::state::WorktreeMoveTarget {
-            target_id: None,
-            label: "top level".into(),
-        }];
-        for (idx, other) in self.state.workspaces.iter().enumerate() {
-            if idx == ws_idx || crate::ui::workspace_parent_index(&self.state, other).is_some() {
-                continue;
-            }
-            entries.push(crate::app::state::WorktreeMoveTarget {
-                target_id: Some(other.id.clone()),
-                label: other.display_name(),
-            });
-        }
+        // Destinations: "top level" plus every valid parent workspace (see
+        // worktree_move_targets), excluding this workspace itself.
+        let entries = self.worktree_move_targets(Some(ws_idx));
         let selected = entries
             .iter()
             .position(|entry| entry.target_id == current_parent)
@@ -1274,6 +1301,51 @@ mod tests {
             app.state.mode,
             crate::app::state::Mode::MoveWorktreeToWorkspace
         );
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[test]
+    fn move_workspace_picker_excludes_loose_worktrees_and_duplicate_labels() {
+        let mut app = app_for_worktree_tests();
+
+        // A real space (valid parent).
+        let odyssey = crate::workspace::Workspace::test_new("odyssey");
+
+        // A linked worktree with no root workspace for its repo, so it is not
+        // grouped and sits at the top level. It must NOT be offered as a parent
+        // — filing a worktree under another worktree makes no sense.
+        let mut loose_wt = crate::workspace::Workspace::test_new("loose-wt");
+        loose_wt.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+            key: "lonely-repo".into(),
+            label: "loose-wt".into(),
+            repo_root: std::path::PathBuf::from("/repo/lonely"),
+            checkout_path: std::path::PathBuf::from("/repo/lonely/loose-wt"),
+            is_linked_worktree: true,
+        });
+
+        // Two top-level spaces that render the same label (e.g. two checkouts of
+        // the same repo/dir). Only one indistinguishable row should be offered.
+        let dupe_a = crate::workspace::Workspace::test_new("dupe");
+        let dupe_b = crate::workspace::Workspace::test_new("dupe");
+
+        // The worktree being moved.
+        let worktree = crate::workspace::Workspace::test_new("feature-wt");
+
+        app.state.workspaces = vec![odyssey, loose_wt, dupe_a, dupe_b, worktree];
+        app.open_move_workspace_picker(4);
+
+        let move_state = app.state.worktree_move.as_ref().expect("picker open");
+        let labels: Vec<&str> = move_state
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
+
+        // Loose linked worktree excluded; duplicate "dupe" collapsed to one.
+        assert_eq!(labels, vec!["top level", "odyssey", "dupe"]);
+        assert!(!labels.contains(&"loose-wt"));
+        assert_eq!(labels.iter().filter(|label| **label == "dupe").count(), 1);
+
         shutdown_test_runtimes(&mut app);
     }
 
