@@ -333,12 +333,13 @@ impl App {
     pub(crate) fn handle_move_workspace_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.close_move_workspace_picker(),
-            KeyCode::Up => {
+            // Vim-style up/down alongside the arrow keys, matching the Navigator.
+            KeyCode::Up | KeyCode::Char('k') => {
                 if let Some(move_state) = self.state.worktree_move.as_mut() {
                     move_state.selected = move_state.selected.saturating_sub(1);
                 }
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 if let Some(move_state) = self.state.worktree_move.as_mut() {
                     if move_state.selected + 1 < move_state.entries.len() {
                         move_state.selected += 1;
@@ -1345,6 +1346,46 @@ mod tests {
         assert_eq!(labels, vec!["top level", "odyssey", "dupe"]);
         assert!(!labels.contains(&"loose-wt"));
         assert_eq!(labels.iter().filter(|label| **label == "dupe").count(), 1);
+
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[test]
+    fn move_workspace_picker_navigates_with_jk() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = app_for_worktree_tests();
+        app.state.workspaces = vec![
+            crate::workspace::Workspace::test_new("a"),
+            crate::workspace::Workspace::test_new("b"),
+            crate::workspace::Workspace::test_new("worktree"),
+        ];
+        app.open_move_workspace_picker(2);
+        let start = app
+            .state
+            .worktree_move
+            .as_ref()
+            .expect("picker open")
+            .selected;
+
+        // j moves down, k moves back up (mirrors the arrow keys / Navigator).
+        app.handle_move_workspace_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()));
+        assert_eq!(
+            app.state
+                .worktree_move
+                .as_ref()
+                .expect("picker open")
+                .selected,
+            start + 1
+        );
+        app.handle_move_workspace_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()));
+        assert_eq!(
+            app.state
+                .worktree_move
+                .as_ref()
+                .expect("picker open")
+                .selected,
+            start
+        );
 
         shutdown_test_runtimes(&mut app);
     }
