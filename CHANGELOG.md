@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.8.4] - 2026-07-29
+
+### Added
+- The move-to-workspace picker now accepts `j`/`k` for down/up in addition to the arrow keys, matching the workspace navigator.
+
 ## [0.8.3] - 2026-07-29
 
 ### Fixed
