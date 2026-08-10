@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.8.6] - 2026-08-10
+
+### Added
+- Workspace navigator now shows left-edge indicators: an accent bar spans the active workspace and an arrow marks the hovered/navigate-selected row, with a brighter highlight so the selection is unmistakable.
+
+### Fixed
+- Workspace navigator (leader + `w`) now navigates with `j`/`k` as well as the arrow keys, and holding any navigation key scrolls the list continuously instead of moving a single item per press. The goto navigator gains the same hold-to-repeat behavior.
+
 ## [0.8.5] - 2026-08-04
 
 ### Changed
