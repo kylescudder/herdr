@@ -71,14 +71,16 @@ fn main() {
         command.arg("--system").arg(system_dir);
     }
 
-    let status = command
-        .current_dir(&vendored_dir)
-        .status()
-        .expect("failed to execute zig build for vendored libghostty-vt");
-    assert!(
-        status.success(),
-        "zig build for vendored libghostty-vt failed: {status}"
-    );
+    if env::var("HERDR_SKIP_ZIG").is_err() {
+        let status = command
+            .current_dir(&vendored_dir)
+            .status()
+            .expect("failed to execute zig build for vendored libghostty-vt");
+        assert!(
+            status.success(),
+            "zig build for vendored libghostty-vt failed: {status}"
+        );
+    }
 
     let lib_dir = vendored_dir.join("zig-out/lib");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
