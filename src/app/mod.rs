@@ -1732,12 +1732,18 @@ impl App {
                         }
                         crossterm::event::KeyEventKind::Repeat => {
                             let current_context = self.terminal_input_context();
-                            let plan = self.input_leases.plan_repeat(
-                                lease_key,
-                                &key,
-                                current_context.as_ref(),
-                            );
-                            self.execute_repeat_plan_headless(source_id, lease_key, key, plan);
+                            if current_context.is_none()
+                                && self.state.mode.repeats_held_navigation_keys()
+                            {
+                                self.replay_non_terminal_key_repeat(key);
+                            } else {
+                                let plan = self.input_leases.plan_repeat(
+                                    lease_key,
+                                    &key,
+                                    current_context.as_ref(),
+                                );
+                                self.execute_repeat_plan_headless(source_id, lease_key, key, plan);
+                            }
                         }
                         crossterm::event::KeyEventKind::Release => {
                             if let Some(lease) = self.input_leases.remove_forwarded(&lease_key) {
@@ -1809,6 +1815,30 @@ impl App {
 
     pub(crate) fn clear_input_source(&mut self, source_id: InputSourceId) {
         self.release_input_source_headless(source_id);
+    }
+
+    /// Replays a held key's auto-repeat for non-terminal list-navigation modes.
+    ///
+    /// Terminal panes receive key-repeat through the input-lease / `RepeatPlan`
+    /// machinery, which is keyed on `TerminalInputContext` and so never fires in
+    /// menu/list modes (they have no context, so their repeats are suppressed).
+    /// For the modes that opt in via `Mode::repeats_held_navigation_keys`, replay
+    /// the repeat as ordinary presses so holding an arrow or `j`/`k` scrolls the
+    /// navigator continuously. Stops early if a replayed press leaves the mode
+    /// (for example Enter accepting a selection) so a held key can't leak presses
+    /// into whatever mode comes next.
+    fn replay_non_terminal_key_repeat(&mut self, key: crate::input::TerminalKey) {
+        let mode = self.state.mode;
+        let repetitions = key.repeat_count.max(1);
+        let press = key
+            .with_kind(crossterm::event::KeyEventKind::Press)
+            .with_repeat_count(1);
+        for _ in 0..repetitions {
+            if self.state.mode != mode {
+                break;
+            }
+            self.handle_non_terminal_key_headless(press.clone());
+        }
     }
 
     /// Handles a key event in non-terminal mode for the headless server.
@@ -5064,6 +5094,73 @@ mod tests {
             Mode::Terminal,
             "Esc should leave navigate mode and return to Terminal mode"
         );
+    }
+
+    #[test]
+    fn held_navigation_key_repeats_workspace_selection() {
+        let mut app = test_app();
+        app.state.workspaces = vec![
+            Workspace::test_new("a"),
+            Workspace::test_new("b"),
+            Workspace::test_new("c"),
+        ];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Down,
+                KeyModifiers::empty(),
+                KeyEventKind::Press,
+            )],
+            false,
+        );
+        assert_eq!(app.state.selected, 1, "the initial press moves once");
+
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Down,
+                KeyModifiers::empty(),
+                KeyEventKind::Repeat,
+            )],
+            false,
+        );
+        assert_eq!(
+            app.state.selected, 2,
+            "a held key's repeat keeps scrolling the navigator instead of being suppressed"
+        );
+        assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn grouped_navigation_repeat_stops_when_mode_changes() {
+        let mut app = test_app();
+        app.state.workspaces = vec![Workspace::test_new("only")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+
+        // Enter accepts the selection and leaves navigate mode; a grouped repeat
+        // must not keep replaying presses into whatever mode comes next.
+        app.route_client_events(
+            vec![crate::raw_input::RawInputEvent::Key(
+                crate::input::TerminalKey::new(KeyCode::Enter, KeyModifiers::empty())
+                    .with_kind(KeyEventKind::Repeat)
+                    .with_repeat_count(3),
+            )],
+            false,
+        );
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn repeats_held_navigation_keys_is_scoped_to_list_modes() {
+        assert!(Mode::Navigate.repeats_held_navigation_keys());
+        assert!(Mode::Navigator.repeats_held_navigation_keys());
+        assert!(!Mode::Terminal.repeats_held_navigation_keys());
+        assert!(!Mode::RenameWorkspace.repeats_held_navigation_keys());
     }
 
     #[test]

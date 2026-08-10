@@ -2402,6 +2402,32 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[test]
+    fn navigate_vim_motions_move_workspace_selection_by_default() {
+        let mut state = state_with_workspaces(&["a", "b", "c"]);
+        state.selected = 0;
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.selected, 1);
+        assert_eq!(state.mode, Mode::Navigate);
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.selected, 2);
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.selected, 1);
+        assert_eq!(state.mode, Mode::Navigate);
+    }
+
+    #[test]
     fn navigate_pane_keys_are_configurable() {
         let mut state = state_with_workspaces(&["test"]);
         let root = state.workspaces[0].tabs[0].root_pane;
@@ -2435,7 +2461,7 @@ navigate_pane_down = "ctrl+j"
     fn focus_pane_prefix_rhs_does_not_create_navigate_mode_pane_shortcut() {
         let mut state = state_with_workspaces(&["test"]);
         let root = state.workspaces[0].tabs[0].root_pane;
-        let below = state.workspaces[0].test_split(Direction::Vertical);
+        let right = state.workspaces[0].test_split(Direction::Horizontal);
         state.workspaces[0].layout.focus_pane(root);
         state.view.pane_infos = state.workspaces[0]
             .active_tab()
@@ -2445,23 +2471,27 @@ navigate_pane_down = "ctrl+j"
         let config: Config = toml::from_str(
             r#"
 [keys]
-focus_pane_down = "prefix+f"
+focus_pane_right = "prefix+f"
 "#,
         )
         .unwrap();
         state.keybinds = config.keybinds();
 
+        // The rhs of a `prefix+` focus-pane binding must not leak into navigate
+        // mode as a plain-key pane shortcut.
         handle_navigate_key(
             &mut state,
             KeyEvent::new(KeyCode::Char('f'), KeyModifiers::empty()),
         );
         assert_eq!(state.workspaces[0].focused_pane_id(), Some(root));
 
+        // The built-in horizontal navigate pane motion (l) still focuses
+        // directionally; j/k are reserved for the workspace list.
         handle_navigate_key(
             &mut state,
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()),
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::empty()),
         );
-        assert_eq!(state.workspaces[0].focused_pane_id(), Some(below));
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(right));
         assert_eq!(state.mode, Mode::Navigate);
     }
 
@@ -2990,8 +3020,8 @@ navigate_pane_down = "ctrl+j"
     async fn navigate_focus_pane_keeps_navigate_mode_active() {
         let mut app = app_with_test_workspaces(&["test"]);
         let root = app.state.workspaces[0].tabs[0].root_pane;
-        let below = app.state.workspaces[0].test_split(Direction::Vertical);
-        app.state.workspaces[0].layout.focus_pane(below);
+        let right = app.state.workspaces[0].test_split(Direction::Horizontal);
+        app.state.workspaces[0].layout.focus_pane(right);
         app.state.view.pane_infos = app.state.workspaces[0]
             .active_tab()
             .unwrap()
@@ -2999,7 +3029,9 @@ navigate_pane_down = "ctrl+j"
             .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
         app.state.mode = Mode::Navigate;
 
-        app.handle_key(TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty()))
+        // h focuses the pane to the left without leaving navigate mode; j/k are
+        // reserved for scrolling the workspace list.
+        app.handle_key(TerminalKey::new(KeyCode::Char('h'), KeyModifiers::empty()))
             .await;
 
         assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));

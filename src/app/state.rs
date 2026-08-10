@@ -904,6 +904,19 @@ impl Mode {
                 | Mode::KeybindHelp
         )
     }
+
+    /// Whether holding a key in this mode should keep repeating its action.
+    ///
+    /// Terminal panes get key-repeat through the pane input-lease machinery,
+    /// which is keyed on `TerminalInputContext` and therefore never fires in
+    /// these non-terminal list modes (they have no context, so their repeats
+    /// are suppressed). `App::replay_non_terminal_key_repeat` replays their
+    /// held keys instead, so holding an arrow or `j`/`k` scrolls the navigator
+    /// continuously. Restricted to pure list navigation so a held key can only
+    /// move the selection, never re-fire a mutating command.
+    pub(crate) fn repeats_held_navigation_keys(self) -> bool {
+        matches!(self, Mode::Navigate | Mode::Navigator)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
