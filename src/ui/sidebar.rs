@@ -1245,9 +1245,9 @@ fn render_workspace_list(
         let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
 
         if highlighted {
-            let bg = if selected {
-                p.surface0
-            } else if is_dragged {
+            let bg = if selected || is_dragged {
+                // Hovered/navigate row (and drag) get the brightest surface so
+                // the highlight is clearly visible, not just a faint tint.
                 p.surface1
             } else {
                 p.surface_dim
@@ -1364,6 +1364,26 @@ fn render_workspace_list(
                 Paragraph::new(Line::from(spans)),
                 Rect::new(card.rect.x, row_y + row_index as u16, card.rect.width, 1),
             );
+        }
+
+        // Left-edge markers, drawn after the row text so they sit flush at the
+        // very edge without being overwritten: an accent bar spans the active
+        // workspace, and an arrow marks the hovered/navigate row. The arrow
+        // wins on a row that is both active and hovered.
+        {
+            let buf = frame.buffer_mut();
+            for row_index in 0..row_height {
+                let y = row_y + row_index;
+                if y >= list_bottom {
+                    break;
+                }
+                let x = card.rect.x;
+                if selected && row_index == 0 {
+                    buf[(x, y)].set_symbol("❯").set_fg(p.accent);
+                } else if is_active {
+                    buf[(x, y)].set_symbol("▎").set_fg(p.accent);
+                }
+            }
         }
 
         if let Some((_, collapsed)) = parent_group {
