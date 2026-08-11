@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.8.7] - 2026-08-11
+
+### Changed
+- Workspace done markers now behave like an inbox rather than a notification: a finished agent stays marked done through focusing and reading its pane, and the marker only clears once you address the agent again (it starts working). Completions are flagged even if you were focused on the pane when they finished. Consequently the API/CLI agent status reports `done` (not `idle`) for a finished agent until it is addressed — use `herdr agent wait --until done` (or the default) to wait for completion.
+
 ## [0.8.6] - 2026-08-10
 
 ### Added
