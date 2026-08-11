@@ -467,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_focus_marks_already_focused_done_agent_seen() {
+    fn agent_focus_preserves_done_status() {
         let mut app = app_with_agent();
         app.state.outer_terminal_focus = Some(false);
 
@@ -498,7 +498,9 @@ mod tests {
         let ResponseResult::AgentInfo { agent } = success.result else {
             panic!("expected agent info response");
         };
-        assert_eq!(agent.agent_status, AgentStatus::Idle);
+        // Focus no longer clears the done marker; the status stays Done until
+        // the agent is addressed again.
+        assert_eq!(agent.agent_status, AgentStatus::Done);
     }
 
     #[test]

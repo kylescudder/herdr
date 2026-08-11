@@ -2430,7 +2430,9 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
             background_pane_id
         ),
     );
-    assert_eq!(pane_after_focus["result"]["pane"]["agent_status"], "idle");
+    // Focusing the tab no longer clears the done marker; the status stays
+    // "done" until the agent is addressed again.
+    assert_eq!(pane_after_focus["result"]["pane"]["agent_status"], "done");
 
     fs::write(&stop_file, "stop").unwrap();
 
