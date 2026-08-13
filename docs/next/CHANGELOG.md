@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.8.8] - 2026-08-13
+
+### Changed
+- In the workspace navigator, the rename-pane keybinding now renames the selected workspace instead of a pane. Combined with binding rename-pane to a key like `prefix+shift+c`, this makes one key a context-sensitive rename: it renames the focused pane from a pane and the selected workspace from the navigator.
+
 ## [0.8.7] - 2026-08-11
 
 ### Changed
