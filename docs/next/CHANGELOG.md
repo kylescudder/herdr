@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.8.9] - 2026-08-13
+
+### Added
+- Acknowledge a workspace to clear its "done" markers: a new action (default `prefix+shift+a`) marks a finished workspace's agents as seen, so they go back to idle without re-running them or removing the workspace. It acts on the selected workspace in the navigator and the active workspace from a pane, updates the sidebar and agent status live, and is also available as `herdr workspace acknowledge <workspace_id>`.
+
 ## [0.8.8] - 2026-08-13
 
 ### Changed
