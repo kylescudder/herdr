@@ -1549,36 +1549,37 @@ fn non_indexed_action_for_key(
     None
 }
 
+/// Adapts a resolved action to the workspace navigator's semantics. Pane-focus
+/// motions are dropped here (the reserved handler owns arrow/`hjkl` movement),
+/// and the rename-pane binding renames the *selected workspace* instead: the
+/// navigator is a workspace list, so its rename key targets the workspace, not
+/// a pane. This is what makes a single rename key context-sensitive — it renames
+/// the focused pane from a pane and the selected workspace from the navigator.
+fn navigate_mode_action_filter(action: NavigateAction) -> Option<NavigateAction> {
+    match action {
+        NavigateAction::FocusPaneLeft
+        | NavigateAction::FocusPaneDown
+        | NavigateAction::FocusPaneUp
+        | NavigateAction::FocusPaneRight => None,
+        NavigateAction::RenamePane => Some(NavigateAction::RenameWorkspace),
+        other => Some(other),
+    }
+}
+
 #[cfg(test)]
 fn navigate_mode_action_for_key(state: &AppState, key: TerminalKey) -> Option<NavigateAction> {
-    let action = action_for_key(state, key, BindingDispatch::Prefix)?;
-    if matches!(
-        action,
-        NavigateAction::FocusPaneLeft
-            | NavigateAction::FocusPaneDown
-            | NavigateAction::FocusPaneUp
-            | NavigateAction::FocusPaneRight
-    ) {
-        return None;
-    }
-    Some(action)
+    navigate_mode_action_filter(action_for_key(state, key, BindingDispatch::Prefix)?)
 }
 
 fn navigate_mode_non_indexed_action_for_key(
     state: &AppState,
     key: &TerminalKey,
 ) -> Option<NavigateAction> {
-    let action = non_indexed_action_for_key(state, key, BindingDispatch::Prefix)?;
-    if matches!(
-        action,
-        NavigateAction::FocusPaneLeft
-            | NavigateAction::FocusPaneDown
-            | NavigateAction::FocusPaneUp
-            | NavigateAction::FocusPaneRight
-    ) {
-        return None;
-    }
-    Some(action)
+    navigate_mode_action_filter(non_indexed_action_for_key(
+        state,
+        key,
+        BindingDispatch::Prefix,
+    )?)
 }
 
 fn navigate_mode_indexed_action_for_key(
@@ -2428,6 +2429,38 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[test]
+    fn navigate_mode_redirects_rename_pane_to_rename_workspace() {
+        assert_eq!(
+            navigate_mode_action_filter(NavigateAction::RenamePane),
+            Some(NavigateAction::RenameWorkspace)
+        );
+        assert_eq!(
+            navigate_mode_action_filter(NavigateAction::RenameTab),
+            Some(NavigateAction::RenameTab)
+        );
+        assert_eq!(
+            navigate_mode_action_filter(NavigateAction::FocusPaneLeft),
+            None
+        );
+    }
+
+    #[test]
+    fn navigator_rename_key_renames_selected_workspace() {
+        let mut state = state_with_workspaces(&["a", "b"]);
+        state.selected = 1;
+        // The user's rename key (bound to rename_pane) renames the focused pane
+        // from a pane, but must rename the selected workspace in the navigator.
+        state.keybinds.rename_pane = crate::config::ActionKeybinds::prefix("r");
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::empty()),
+        );
+
+        assert_eq!(state.mode, Mode::RenameWorkspace);
+    }
+
+    #[test]
     fn navigate_pane_keys_are_configurable() {
         let mut state = state_with_workspaces(&["test"]);
         let root = state.workspaces[0].tabs[0].root_pane;
@@ -2933,7 +2966,10 @@ command = "printf literal > '{}'"
 
         app.handle_navigate_key(TerminalKey::new(KeyCode::Char('P'), KeyModifiers::empty()));
 
-        assert_eq!(app.state.mode, Mode::RenamePane);
+        // Uppercase P prefers the shifted rename_pane binding (prefix+shift+p)
+        // over unshifted prefix+p; in the navigator that renames the selected
+        // workspace rather than a pane.
+        assert_eq!(app.state.mode, Mode::RenameWorkspace);
     }
 
     #[test]
