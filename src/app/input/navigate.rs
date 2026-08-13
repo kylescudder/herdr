@@ -238,6 +238,13 @@ impl App {
                     }
                 }
             }
+            NavigateAction::AcknowledgeWorkspace => {
+                // Stay in the navigator so several workspaces can be quieted in
+                // a row; from a pane, finish_action_context returns to Terminal.
+                if let Some(ws_idx) = workspace_action_target(&self.state, context) {
+                    self.acknowledge_workspace_seen(ws_idx);
+                }
+            }
             NavigateAction::SwitchWorkspace(idx) => {
                 if let Some(ws_idx) = self.state.workspace_at_visible_position(idx) {
                     self.focus_workspace_idx_via_api(ws_idx);
@@ -1344,6 +1351,7 @@ pub(crate) enum NavigateAction {
     RemoveWorktree,
     RenameWorkspace,
     CloseWorkspace,
+    AcknowledgeWorkspace,
     SwitchWorkspace(usize),
     SwitchTab(usize),
     FocusAgent(usize),
@@ -1505,6 +1513,7 @@ fn non_indexed_action_for_key(
         (&kb.remove_worktree, NavigateAction::RemoveWorktree),
         (&kb.rename_workspace, NavigateAction::RenameWorkspace),
         (&kb.close_workspace, NavigateAction::CloseWorkspace),
+        (&kb.acknowledge, NavigateAction::AcknowledgeWorkspace),
         (&kb.previous_workspace, NavigateAction::PreviousWorkspace),
         (&kb.next_workspace, NavigateAction::NextWorkspace),
         (&kb.previous_agent, NavigateAction::PreviousAgent),
@@ -1655,6 +1664,11 @@ pub(super) fn execute_navigate_action_in_context(
                     state.close_selected_workspace();
                     leave_navigate_mode(state);
                 }
+            }
+        }
+        NavigateAction::AcknowledgeWorkspace => {
+            if let Some(ws_idx) = workspace_action_target(state, context) {
+                state.acknowledge_workspace(ws_idx);
             }
         }
         NavigateAction::SwitchWorkspace(idx) => {
@@ -2458,6 +2472,36 @@ navigate_pane_down = "ctrl+j"
         );
 
         assert_eq!(state.mode, Mode::RenameWorkspace);
+    }
+
+    #[test]
+    fn navigate_acknowledge_marks_selected_workspace_seen() {
+        let mut state = state_with_workspaces(&["a", "b"]);
+        state.ensure_test_terminals();
+        state.selected = 1;
+        for pane in state.workspaces[1]
+            .tabs
+            .iter_mut()
+            .flat_map(|tab| tab.panes.values_mut())
+        {
+            pane.seen = false;
+        }
+
+        let mut terminal_runtimes = TerminalRuntimeRegistry::new();
+        execute_navigate_action_in_context(
+            &mut state,
+            &mut terminal_runtimes,
+            NavigateAction::AcknowledgeWorkspace,
+            ActionContext::Navigate,
+        );
+
+        assert!(state.workspaces[1]
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.panes.values())
+            .all(|pane| pane.seen));
+        // Acknowledge is not a mode transition; stay in the navigator.
+        assert_eq!(state.mode, Mode::Navigate);
     }
 
     #[test]

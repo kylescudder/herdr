@@ -1264,6 +1264,56 @@ impl AppState {
         }
     }
 
+    /// Marks every pane in `ws_idx` as seen ("acknowledged"), turning any
+    /// finished "done" agent back to "idle" without changing its agent state or
+    /// re-running it. Returns a `PaneStateUpdate` for each pane whose seen flag
+    /// actually flipped so the caller can emit `pane.agent_status_changed`.
+    pub(crate) fn acknowledge_workspace(&mut self, ws_idx: usize) -> Vec<PaneStateUpdate> {
+        let now = std::time::Instant::now();
+        let mut updates = Vec::new();
+        let Some(ws) = self.workspaces.get(ws_idx) else {
+            return updates;
+        };
+        let targets: Vec<(PaneId, crate::terminal::TerminalId)> = ws
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.panes.iter())
+            .filter(|(_, pane)| !pane.seen)
+            .map(|(pane_id, pane)| (*pane_id, pane.attached_terminal_id.clone()))
+            .collect();
+        for (pane_id, terminal_id) in targets {
+            let Some(terminal) = self.terminals.get(&terminal_id) else {
+                continue;
+            };
+            let change = terminal.unchanged_effective_state_change_at(now);
+            if let Some(pane) = self.workspaces[ws_idx]
+                .tabs
+                .iter_mut()
+                .find_map(|tab| tab.panes.get_mut(&pane_id))
+            {
+                pane.seen = true;
+            }
+            updates.push(PaneStateUpdate {
+                pane_id,
+                ws_idx,
+                previous_agent_label: change.previous_agent_label.clone(),
+                previous_known_agent: change.previous_known_agent,
+                previous_state: change.previous_state,
+                previous_seen: false,
+                previous_presentation: change.previous_presentation.clone(),
+                agent_label: change.agent_label.clone(),
+                known_agent: change.known_agent,
+                state: change.state,
+                seen: true,
+                presentation: change.presentation.clone(),
+                agent_name_changed: false,
+                agent_released: false,
+                agent_release_status: None,
+            });
+        }
+        updates
+    }
+
     pub(crate) fn visible_workspace_order(&self) -> Vec<usize> {
         // Mobile always shows the worktree tree expanded, so its visible order
         // must ignore collapse state to match what the switcher renders.
@@ -4908,6 +4958,30 @@ mod tests {
             observed_at: std::time::Instant::now(),
         });
         assert!(state.workspaces[1].panes.get(&pane_id).unwrap().seen);
+    }
+
+    #[test]
+    fn acknowledge_workspace_marks_done_agents_seen() {
+        let mut state = app_with_workspaces(&["a", "b"]);
+        let ws = 1;
+        for pane in state.workspaces[ws]
+            .tabs
+            .iter_mut()
+            .flat_map(|tab| tab.panes.values_mut())
+        {
+            pane.seen = false;
+        }
+
+        let updates = state.acknowledge_workspace(ws);
+
+        assert!(!updates.is_empty());
+        assert!(state.workspaces[ws]
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.panes.values())
+            .all(|pane| pane.seen));
+        // Nothing left unseen, so acknowledging again is a no-op.
+        assert!(state.acknowledge_workspace(ws).is_empty());
     }
 
     #[test]

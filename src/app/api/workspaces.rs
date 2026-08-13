@@ -330,6 +330,21 @@ impl App {
         encode_success(id, ResponseResult::Ok {})
     }
 
+    pub(super) fn handle_workspace_acknowledge(
+        &mut self,
+        id: String,
+        target: WorkspaceTarget,
+    ) -> String {
+        let Some(index) = self.parse_workspace_id(&target.workspace_id) else {
+            return workspace_not_found(id, &target.workspace_id);
+        };
+        if self.state.workspaces.get(index).is_none() {
+            return workspace_not_found(id, &target.workspace_id);
+        }
+        self.acknowledge_workspace_seen(index);
+        encode_success(id, ResponseResult::Ok {})
+    }
+
     fn workspace_list_info(&self) -> Vec<crate::api::schema::WorkspaceInfo> {
         self.state
             .workspaces

@@ -4711,6 +4711,22 @@
         {
           "properties": {
             "method": {
+              "const": "workspace.acknowledge",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/WorkspaceTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "worktree.list",
               "type": "string"
             },
