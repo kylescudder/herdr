@@ -935,6 +935,18 @@ pub(crate) enum NavigatorTarget {
     },
 }
 
+impl NavigatorTarget {
+    /// The workspace that owns this row, regardless of whether the row is the
+    /// workspace itself, one of its tabs, or one of its panes.
+    pub(crate) fn ws_idx(&self) -> usize {
+        match self {
+            NavigatorTarget::Workspace { ws_idx }
+            | NavigatorTarget::Tab { ws_idx, .. }
+            | NavigatorTarget::Pane { ws_idx, .. } => *ws_idx,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NavigatorRow {
     pub target: NavigatorTarget,

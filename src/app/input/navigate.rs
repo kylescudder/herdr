@@ -133,6 +133,14 @@ impl App {
             return;
         }
 
+        // shift+k / shift+j reorder the highlighted project. Checked before the
+        // plain k/j selection-move bindings so the shifted keys never fall
+        // through to them or to the exit path below.
+        if let Some(direction) = super::navigator_reorder::reorder_direction_for_key(&key) {
+            self.reorder_selected_workspace(direction);
+            return;
+        }
+
         if self
             .state
             .keybinds

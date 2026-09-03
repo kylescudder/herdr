@@ -560,6 +560,8 @@ fn render_footer(app: &AppState, frame: &mut Frame, area: Rect) {
             Span::styled(" states  ", dim),
             Span::styled("j/k/↑↓", key),
             Span::styled(" move  ", dim),
+            Span::styled("⇧j/k", key),
+            Span::styled(" reorder  ", dim),
             Span::styled("esc", key),
             Span::styled(" close", dim),
         ])
