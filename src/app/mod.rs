@@ -1828,6 +1828,14 @@ impl App {
     /// (for example Enter accepting a selection) so a held key can't leak presses
     /// into whatever mode comes next.
     fn replay_non_terminal_key_repeat(&mut self, key: crate::input::TerminalKey) {
+        // A workspace reorder (shift+j/k) is a mutating command. Never let a held
+        // chord auto-repeat it: the replay below turns one held key into a press
+        // per repeat tick, which would move the project several slots and emit a
+        // persistence/API event each time. Only the non-mutating selection keys
+        // repeat; a reorder happens once per physical press.
+        if input::reorder_direction_for_key(&key.as_key_event()).is_some() {
+            return;
+        }
         let mode = self.state.mode;
         let repetitions = key.repeat_count.max(1);
         let press = key
@@ -1909,7 +1917,7 @@ impl App {
                 self.handle_settings_key(key_event);
             }
             Mode::Navigator => {
-                input::handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event);
+                self.handle_navigator_key_with_reorder(key_event);
             }
             Mode::Terminal => {
                 // Should not be called in terminal mode.
@@ -5131,6 +5139,55 @@ mod tests {
         assert_eq!(
             app.state.selected, 2,
             "a held key's repeat keeps scrolling the navigator instead of being suppressed"
+        );
+        assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn held_reorder_key_does_not_repeat_the_move() {
+        let mut app = test_app();
+        app.state.workspaces = vec![
+            Workspace::test_new("a"),
+            Workspace::test_new("b"),
+            Workspace::test_new("c"),
+        ];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+
+        let order = |app: &App| -> Vec<String> {
+            app.state
+                .workspaces
+                .iter()
+                .map(|ws| ws.display_name())
+                .collect()
+        };
+
+        // A press moves the selected project ("a") down one slot.
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Char('J'),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            )],
+            false,
+        );
+        assert_eq!(order(&app), ["b", "a", "c"], "the initial press moves once");
+
+        // Holding the chord (a Repeat with a multi-count) is a mutating command
+        // and must not fire again per repeat tick.
+        app.route_client_events(
+            vec![crate::raw_input::RawInputEvent::Key(
+                crate::input::TerminalKey::new(KeyCode::Char('J'), KeyModifiers::SHIFT)
+                    .with_kind(KeyEventKind::Repeat)
+                    .with_repeat_count(3),
+            )],
+            false,
+        );
+        assert_eq!(
+            order(&app),
+            ["b", "a", "c"],
+            "a held reorder repeat must not keep moving the project"
         );
         assert_eq!(app.state.mode, Mode::Navigate);
     }

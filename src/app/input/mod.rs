@@ -42,6 +42,7 @@ mod lease;
 mod modal;
 mod mouse;
 mod navigate;
+mod navigator_reorder;
 mod overlays;
 mod selection;
 mod settings;
@@ -51,13 +52,13 @@ mod terminal;
 pub(crate) use self::{
     lease::{ConsumedInputLease, ForwardedInputLease, InputLeaseKey, InputLeaseTable, RepeatPlan},
     modal::{
-        handle_global_menu_key, handle_keybind_help_key, handle_navigator_key,
-        insert_keybind_help_query_text, insert_navigator_search_text, insert_rename_input_text,
-        open_new_workspace_dialog,
+        handle_global_menu_key, handle_keybind_help_key, insert_keybind_help_query_text,
+        insert_navigator_search_text, insert_rename_input_text, open_new_workspace_dialog,
     },
     navigate::{
         terminal_direct_indexed_navigation_action, terminal_direct_non_indexed_navigation_action,
     },
+    navigator_reorder::reorder_direction_for_key,
     settings::open_settings_at,
 };
 use self::{
@@ -115,9 +116,7 @@ impl App {
                 Mode::Settings => self.handle_settings_key(key_event),
                 Mode::GlobalMenu => handle_global_menu_key(&mut self.state, key_event),
                 Mode::KeybindHelp => handle_keybind_help_key(&mut self.state, key),
-                Mode::Navigator => {
-                    handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event)
-                }
+                Mode::Navigator => self.handle_navigator_key_with_reorder(key_event),
                 Mode::Terminal => unreachable!(),
             },
         }
