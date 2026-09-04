@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.8.10] - 2026-09-04
+
+### Added
+- Reorder projects from the keyboard: with a workspace selected in the sidebar picker (`prefix+w`) or the session navigator (`prefix+g`), press `shift+k` to move it up and `shift+j` to move it down. Worktree groups move as a single atomic block, and the change persists just like dragging a workspace in the sidebar.
+
 ## [0.8.9] - 2026-08-13
 
 ### Added
