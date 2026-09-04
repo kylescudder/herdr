@@ -1,6 +1,8 @@
 //! Integration tests for thin client mode.
 
-mod support;
+#![cfg(unix)]
+
+pub mod support;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -11,12 +13,14 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use serde::Deserialize;
 use serde_json::Value;
 use support::{
-    cleanup_test_base, client_handshake, encode_varint_u32, frame_message, read_server_message,
-    register_runtime_dir, register_spawned_herdr_pid, unregister_spawned_herdr_pid,
-    wait_for_message_variant, wait_for_socket, wait_until, CURRENT_PROTOCOL,
+    cleanup_test_base, client_shell_handshake, read_server_message, register_runtime_dir,
+    register_spawned_herdr_pid, unregister_spawned_herdr_pid, wait_for_client_shell_bootstrap,
+    wait_for_message_variant, wait_for_message_variants, wait_for_socket, wait_until,
+    CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
+    SERVER_MESSAGE_PANE_SURFACE_PATCH, SERVER_MESSAGE_SEMANTIC_NOTIFICATION,
+    SERVER_MESSAGE_SERVER_SHUTDOWN,
 };
 
 fn unique_test_dir() -> PathBuf {
@@ -81,6 +85,33 @@ fn spawn_client_process(
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
+    spawn_client_process_with_args(config_home, runtime_dir, api_socket_path, &["client"])
+}
+
+fn spawn_client_shell_process(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket_path: &PathBuf,
+) -> SpawnedHerdr {
+    spawn_client_process_with_args(config_home, runtime_dir, api_socket_path, &["client"])
+}
+
+fn spawn_client_process_with_args(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket_path: &PathBuf,
+    args: &[&str],
+) -> SpawnedHerdr {
+    spawn_client_process_with_args_and_env(config_home, runtime_dir, api_socket_path, args, &[])
+}
+
+fn spawn_client_process_with_args_and_env(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket_path: &PathBuf,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+) -> SpawnedHerdr {
     register_runtime_dir(runtime_dir);
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -92,7 +123,7 @@ fn spawn_client_process(
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
-    cmd.arg("client");
+    cmd.args(args);
     cmd.env("HERDR_DISABLE_SOUND", "1");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
@@ -100,6 +131,9 @@ fn spawn_client_process(
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -115,16 +149,28 @@ fn spawn_server(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    _client_socket_path: &PathBuf,
+    client_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
-    fs::create_dir_all(runtime_dir).unwrap();
-    register_runtime_dir(runtime_dir);
-    fs::write(
-        config_home.join("herdr/config.toml"),
+    spawn_server_with_config(
+        config_home,
+        runtime_dir,
+        api_socket_path,
+        client_socket_path,
         "onboarding = false\n",
     )
-    .unwrap();
+}
+
+fn spawn_server_with_config(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket_path: &PathBuf,
+    _client_socket_path: &PathBuf,
+    config: &str,
+) -> SpawnedHerdr {
+    fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
+    fs::create_dir_all(runtime_dir).unwrap();
+    register_runtime_dir(runtime_dir);
+    fs::write(config_home.join(app_dir_name()).join("config.toml"), config).unwrap();
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -203,100 +249,12 @@ fn app_dir_name() -> &'static str {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct FrameWire {
-    cells: Vec<CellWire>,
-    width: u16,
-    height: u16,
-    cursor: Option<CursorWire>,
-    hyperlinks: Vec<String>,
-    graphics: Vec<u8>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct CellWire {
-    symbol: String,
-    fg: u32,
-    bg: u32,
-    modifier: u16,
-    skip: bool,
-    hyperlink: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CursorWire {
-    x: u16,
-    y: u16,
-    visible: bool,
-    shape: u8,
-}
-
-fn decode_frame_payload(payload: &[u8]) -> std::io::Result<FrameWire> {
-    bincode::serde::decode_from_slice(payload, bincode::config::standard())
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))
-        .and_then(|(frame, consumed): (FrameWire, usize)| {
-            if consumed != payload.len() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "frame payload had trailing bytes: consumed={}, len={}",
-                        consumed,
-                        payload.len()
-                    ),
-                ));
-            }
-            Ok(frame)
-        })
-}
-
-fn read_next_frame_payload(stream: &mut UnixStream, timeout: Duration) -> Result<Vec<u8>, String> {
-    stream
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .map_err(|e| e.to_string())?;
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        match read_server_message(stream) {
-            Ok((1, payload)) => return Ok(payload),
-            Ok(_) => continue,
-            Err(_) => continue,
-        }
-    }
-    Err("timed out waiting for Frame message".into())
-}
-
-fn frame_text(frame: &FrameWire) -> String {
-    if frame.cells.is_empty() {
-        return String::new();
-    }
-
-    let width = frame.width.max(1) as usize;
-    let mut text = String::new();
-    for row in frame.cells.chunks(width) {
-        for cell in row {
-            let _ = (cell.fg, cell.bg, cell.modifier, cell.skip);
-            text.push_str(&cell.symbol);
-        }
-        text.push('\n');
-    }
-    let _ = (frame.height, frame.graphics.len());
-    if let Some(cursor) = frame.cursor.as_ref() {
-        let _ = (cursor.x, cursor.y, cursor.visible, cursor.shape);
-    }
-
-    text
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[test]
-fn client_connects_and_receives_frame() {
-    // Client connects to server and handshake completes.
-    // Client receives Frame messages.
-    // Server sends rendered frames to connected clients.
+fn client_connects_and_receives_pane_surface() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -308,24 +266,132 @@ fn client_connects_and_receives_frame() {
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
-    // Connect and handshake.
     let mut stream = UnixStream::connect(&client_socket).expect("should connect to client socket");
-    let (version, error) =
-        client_handshake(&mut stream, CURRENT_PROTOCOL, 80, 24).expect("handshake should succeed");
-    assert_eq!(
-        version, CURRENT_PROTOCOL,
-        "server should report current protocol version"
-    );
-    assert!(
-        error.is_none(),
-        "handshake should not have error: {:?}",
-        error
-    );
-
-    read_next_frame_payload(&mut stream, Duration::from_secs(10))
-        .expect("should receive a frame from server");
+    let (version, error) = client_shell_handshake(&mut stream, CURRENT_PROTOCOL, 54, 23)
+        .expect("handshake should succeed");
+    assert_eq!(version, CURRENT_PROTOCOL);
+    assert!(error.is_none(), "{error:?}");
+    wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(10))
+        .expect("should receive the shell snapshot and pane surface");
 
     cleanup_spawned_herdr(spawned, base);
+}
+
+#[test]
+fn direct_attach_initial_mouse_capture_follows_config() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+    let config_path = config_home.join(app_dir_name()).join("config.toml");
+
+    let spawned_server = spawn_server_with_config(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &client_socket,
+        "onboarding = false\n[ui]\nmouse_capture = false\n",
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+    let created = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "create-workspace-for-direct-attach",
+            "method": "workspace.create",
+            "params": {"cwd": base},
+        })
+        .to_string(),
+    );
+    let terminal_id = created["result"]["root_pane"]["terminal_id"]
+        .as_str()
+        .expect("created terminal id")
+        .to_string();
+
+    let mut attach = spawn_client_process_with_args(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &["terminal", "attach", &terminal_id],
+    );
+    let output = spawn_pty_drain(
+        attach
+            ._master
+            .as_ref()
+            .expect("direct attach master")
+            .try_clone_reader()
+            .expect("clone direct attach PTY reader"),
+    );
+    assert!(
+        wait_until(Duration::from_secs(5), Duration::from_millis(20), || {
+            read_output(&output).contains("\x1b[?7l")
+        }),
+        "direct attach terminal setup should complete; output: {:?}",
+        read_output(&output)
+    );
+    assert!(
+        !read_output(&output).contains("\x1b[?1000h"),
+        "mouse capture disabled must not enable host mouse reporting; output: {:?}",
+        read_output(&output)
+    );
+    assert!(
+        read_output(&output).contains("\x1b[?2004h"),
+        "direct attach must enable host bracketed paste; output: {:?}",
+        read_output(&output)
+    );
+
+    let restore_watermark = output_len(&output);
+    attach
+        ._master
+        .as_ref()
+        .expect("direct attach master")
+        .take_writer()
+        .expect("direct attach PTY writer")
+        .write_all(b"\x02q")
+        .expect("detach direct attach client");
+    let restore_output = drain_until_client_exits(&mut attach, &output, restore_watermark);
+    assert!(
+        restore_output.contains("\x1b[?2004l"),
+        "direct attach must disable host bracketed paste on restore; output: {restore_output:?}"
+    );
+    drop(attach);
+
+    fs::write(
+        &config_path,
+        "onboarding = false\n[ui]\nmouse_capture = true\n",
+    )
+    .unwrap();
+    let attach = spawn_client_process_with_args(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &["terminal", "attach", &terminal_id],
+    );
+    let output = spawn_pty_drain(
+        attach
+            ._master
+            .as_ref()
+            .expect("direct attach master")
+            .try_clone_reader()
+            .expect("clone direct attach PTY reader"),
+    );
+    assert!(
+        wait_until(Duration::from_secs(5), Duration::from_millis(20), || {
+            read_output(&output).contains("\x1b[?7l")
+        }),
+        "direct attach terminal setup should complete; output: {:?}",
+        read_output(&output)
+    );
+    assert!(
+        read_output(&output).contains("\x1b[?1000h"),
+        "mouse capture enabled must retain host mouse reporting; output: {:?}",
+        read_output(&output)
+    );
+
+    drop(spawned_server);
+    cleanup_spawned_herdr(attach, base);
 }
 
 #[test]
@@ -380,41 +446,26 @@ fn client_sees_headless_startup_config_diagnostic() {
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
-    let mut stream = UnixStream::connect(&client_socket).expect("should connect to client socket");
-    let (version, error) =
-        client_handshake(&mut stream, CURRENT_PROTOCOL, 80, 24).expect("handshake should succeed");
-    assert_eq!(version, CURRENT_PROTOCOL);
-    assert!(error.is_none(), "{:?}", error);
-
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut found_diagnostic = false;
-    let mut last_frame_text = String::new();
-    while Instant::now() < deadline {
-        match read_server_message(&mut stream) {
-            Ok((1, payload)) => {
-                let frame = decode_frame_payload(&payload).expect("decode frame");
-                last_frame_text = frame_text(&frame);
-                if last_frame_text.contains("config.toml")
-                    && last_frame_text.contains("herdr config check")
-                {
-                    found_diagnostic = true;
-                    break;
-                }
-            }
-            Ok(_) => {}
-            Err(_) => break,
-        }
-    }
-
+    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let output = spawn_pty_drain(
+        client
+            ._master
+            .as_ref()
+            .expect("client shell master")
+            .try_clone_reader()
+            .expect("clone client shell reader"),
+    );
     assert!(
-        found_diagnostic,
-        "attached client should see startup config parse diagnostic; last frame:\n{last_frame_text}"
+        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
+            let output = read_output(&output);
+            output.contains("config.toml") && output.contains("herdr config check")
+        }),
+        "client shell should render startup config diagnostic; output: {:?}",
+        read_output(&output)
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    drop(spawned);
+    cleanup_spawned_herdr(client, base);
 }
 
 #[test]
@@ -645,7 +696,24 @@ fn attach_thin_client(
     api_socket: &PathBuf,
     client_socket: &PathBuf,
 ) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
-    let spawned_server = spawn_server(config_home, runtime_dir, api_socket, client_socket);
+    attach_thin_client_with_config(
+        config_home,
+        runtime_dir,
+        api_socket,
+        client_socket,
+        "onboarding = false\n",
+    )
+}
+
+fn attach_thin_client_with_config(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket: &PathBuf,
+    client_socket: &PathBuf,
+    config: &str,
+) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
+    let spawned_server =
+        spawn_server_with_config(config_home, runtime_dir, api_socket, client_socket, config);
     wait_for_socket(api_socket, Duration::from_secs(10));
     wait_for_socket(client_socket, Duration::from_secs(10));
 
@@ -682,6 +750,300 @@ fn attach_thin_client(
     );
 
     (spawned_server, thin_client, output)
+}
+
+#[test]
+fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let mut server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    let created = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "client-shell-lifecycle-workspace",
+            "method": "workspace.create",
+            "params": {"cwd": base, "focus": true, "label": "shell-lifecycle"},
+        })
+        .to_string(),
+    );
+    assert_eq!(created["result"]["type"], "workspace_created", "{created}");
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("root pane id")
+        .to_string();
+    send_pane_shell_command(&api_socket, &pane_id, "printf 'SHELL_LIFECYCLE_INITIAL\\n'");
+
+    let mut client_a = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let output_a = spawn_pty_drain(
+        client_a
+            ._master
+            .as_ref()
+            .expect("first client shell PTY")
+            .try_clone_reader()
+            .expect("clone first client shell reader"),
+    );
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
+            let output = read_output(&output_a);
+            output.contains("shell-lifecycle") && output.contains("SHELL_LIFECYCLE_INITIAL")
+        }),
+        "client shell should compose one coherent snapshot and pane surface; output: {:?}",
+        read_output(&output_a)
+    );
+
+    let detach_watermark = output_len(&output_a);
+    client_a
+        ._master
+        .as_ref()
+        .expect("first client shell PTY")
+        .take_writer()
+        .expect("first client shell writer")
+        .write_all(b"\x02q")
+        .expect("detach first client shell");
+    let detach_output = drain_until_client_exits(&mut client_a, &output_a, detach_watermark);
+    assert!(
+        output_has_mouse_teardown(&detach_output),
+        "client shell should restore the host terminal after detach; output: {detach_output:?}"
+    );
+    assert!(
+        ping_socket(&api_socket).contains("pong"),
+        "server should remain alive after client shell detach"
+    );
+    drop(client_a);
+
+    send_pane_shell_command(
+        &api_socket,
+        &pane_id,
+        "printf 'SHELL_LIFECYCLE_DETACHED\\n'",
+    );
+    let mut client_b = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let output_b = spawn_pty_drain(
+        client_b
+            ._master
+            .as_ref()
+            .expect("reattached client shell PTY")
+            .try_clone_reader()
+            .expect("clone reattached client shell reader"),
+    );
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
+            let output = read_output(&output_b);
+            output.contains("shell-lifecycle") && output.contains("SHELL_LIFECYCLE_DETACHED")
+        }),
+        "fresh client shell should receive current state and detached-period output; output: {:?}",
+        read_output(&output_b)
+    );
+
+    let disconnect_watermark = output_len(&output_b);
+    if let Some(pid) = server.child.process_id() {
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    server.close_master();
+    let disconnect_output =
+        drain_until_client_exits(&mut client_b, &output_b, disconnect_watermark);
+    assert!(
+        output_has_mouse_teardown(&disconnect_output),
+        "client shell should restore the host terminal after endpoint loss; output: {disconnect_output:?}"
+    );
+    assert!(
+        disconnect_output
+            .to_lowercase()
+            .contains("lost connection to server"),
+        "client shell should explain endpoint loss; output: {disconnect_output:?}"
+    );
+
+    drop(server);
+    cleanup_spawned_herdr(client_b, base);
+}
+
+fn captured_window_titles(output: &SharedOutput) -> Vec<String> {
+    read_output(output)
+        .split("\x1b]0;")
+        .skip(1)
+        .filter_map(|suffix| {
+            suffix
+                .split_once('\x07')
+                .map(|(title, _)| title.to_string())
+        })
+        .collect()
+}
+
+fn wait_for_window_title(output: &SharedOutput, expected_suffix: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Some(title) = captured_window_titles(output)
+            .into_iter()
+            .find(|title| title.ends_with(expected_suffix))
+        {
+            return title;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!(
+        "outer window title ending in {expected_suffix:?} was not emitted; titles: {:?}; output: {:?}",
+        captured_window_titles(output),
+        read_output(output)
+    );
+}
+
+fn wait_for_pane_terminal_title(socket_path: &PathBuf, pane_id: &str, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let request = serde_json::json!({
+            "id": "window-title-pane-get",
+            "method": "pane.get",
+            "params": {"pane_id": pane_id},
+        });
+        let response = send_json_request(socket_path, &request.to_string());
+        if response["result"]["pane"]["terminal_title"].as_str() == Some(expected) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("pane {pane_id} did not report terminal title {expected:?}");
+}
+
+fn send_pane_shell_command(socket_path: &PathBuf, pane_id: &str, command: &str) {
+    let request = serde_json::json!({
+        "id": "window-title-command",
+        "method": "pane.send_input",
+        "params": {
+            "pane_id": pane_id,
+            "text": command,
+            "keys": ["Enter"],
+        }
+    });
+    let response = send_json_request(socket_path, &request.to_string());
+    assert_eq!(response["result"]["type"], "ok", "{response}");
+}
+
+#[test]
+fn configured_window_title_tracks_all_tokens_and_focused_osc_only() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+    let (server, client, output) = attach_thin_client_with_config(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &client_socket,
+        "onboarding = false\n[ui]\nwindow_title = \"H={hostname}|W={workspace}|T={tab}|P={pane}|O={terminal_title}\"\n",
+    );
+
+    let created = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "create-workspace",
+            "method": "workspace.create",
+            "params": {"cwd": base, "focus": true},
+        })
+        .to_string(),
+    );
+    assert_eq!(created["result"]["type"], "workspace_created", "{created}");
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .expect("workspace id")
+        .to_string();
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("pane id")
+        .to_string();
+    let tab_id = created["result"]["tab"]["tab_id"]
+        .as_str()
+        .expect("tab id")
+        .to_string();
+
+    for request in [
+        serde_json::json!({
+            "id": "rename-workspace",
+            "method": "workspace.rename",
+            "params": {"workspace_id": workspace_id, "label": "space-a"},
+        }),
+        serde_json::json!({
+            "id": "rename-tab",
+            "method": "tab.rename",
+            "params": {"tab_id": tab_id, "label": "tab-a"},
+        }),
+        serde_json::json!({
+            "id": "rename-pane",
+            "method": "pane.rename",
+            "params": {"pane_id": pane_id, "label": "pane-a"},
+        }),
+    ] {
+        let response = send_json_request(&api_socket, &request.to_string());
+        assert!(response.get("result").is_some(), "{response}");
+    }
+
+    let renamed = wait_for_window_title(&output, "|W=space-a|T=tab-a|P=pane-a|O=");
+    assert!(renamed.starts_with("H="));
+    assert!(
+        !renamed.starts_with("H=|"),
+        "hostname token was empty: {renamed}"
+    );
+
+    send_pane_shell_command(&api_socket, &pane_id, r"printf '\033]0;building\007'");
+    wait_for_window_title(&output, "|W=space-a|T=tab-a|P=pane-a|O=building");
+
+    let second_tab = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "second-tab",
+            "method": "tab.create",
+            "params": {"workspace_id": workspace_id, "focus": true},
+        })
+        .to_string(),
+    );
+    assert_eq!(second_tab["result"]["type"], "tab_created", "{second_tab}");
+    let second_pane_id = second_tab["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("second pane id")
+        .to_string();
+    wait_for_window_title(&output, "|W=space-a|T=2|P=|O=");
+    let titles_before_hidden_update = captured_window_titles(&output).len();
+    send_pane_shell_command(&api_socket, &pane_id, r"printf '\033]0;hidden update\007'");
+    // Intentionally consume the AppState title through a read-only request
+    // before the queued source is handled.
+    wait_for_pane_terminal_title(&api_socket, &pane_id, "hidden update");
+    send_pane_shell_command(
+        &api_socket,
+        &second_pane_id,
+        r"printf '\033]0;foreground marker\007'",
+    );
+    wait_for_window_title(&output, "|W=space-a|T=2|P=|O=foreground marker");
+    assert!(
+        captured_window_titles(&output)[titles_before_hidden_update..]
+            .iter()
+            .all(|title| !title.ends_with("|O=hidden update")),
+        "a hidden pane title reached the outer terminal"
+    );
+
+    let focused = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "focus-first-tab",
+            "method": "tab.focus",
+            "params": {"tab_id": tab_id},
+        })
+        .to_string(),
+    );
+    assert_eq!(focused["result"]["tab"]["focused"], true, "{focused}");
+    wait_for_window_title(&output, "|W=space-a|T=tab-a|P=pane-a|O=hidden update");
+
+    drop(server);
+    cleanup_spawned_herdr(client, base);
 }
 
 /// Polls until the client exits, then returns only the output captured after
@@ -756,11 +1118,9 @@ fn client_restores_terminal_on_server_eof() {
     });
 }
 
-/// The path this PR actually fixes: a direct SIGHUP/SIGTERM to the client (e.g.
-/// a terminal emulator SIGHUPing its foreground child on window close). With
-/// `ctrlc`'s `termination` feature the handler sets `should_quit`, the loop
-/// exits, and `TerminalGuard::Drop` restores the terminal. Without it the
-/// process would die un-unwound and leak mouse reporting.
+/// A direct SIGHUP/SIGTERM with a writable terminal follows the graceful quit
+/// path and emits the terminal teardown. Actual terminal-window closure also
+/// makes the PTY unwritable and is covered separately below.
 #[test]
 fn client_restores_terminal_on_sighup() {
     assert_client_restores_terminal(|_server, client| {
@@ -771,15 +1131,149 @@ fn client_restores_terminal_on_sighup() {
     });
 }
 
+fn read_until_client_attaches(client: &SpawnedHerdr) -> String {
+    let master = client._master.as_ref().expect("thin client master");
+    let fd = master.as_raw_fd().expect("thin client PTY file descriptor");
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    assert_ne!(flags, -1, "read thin client PTY flags");
+    assert_ne!(
+        unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        -1,
+        "make thin client PTY nonblocking"
+    );
+
+    let mut reader = master.try_clone_reader().expect("clone client PTY reader");
+    let mut output = String::new();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        let mut buf = [0u8; 4096];
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => output.push_str(&String::from_utf8_lossy(&buf[..n])),
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(err) => panic!("read thin client PTY: {err}"),
+        }
+        if output.contains('\u{2500}')
+            || output.contains("workspace")
+            || output.contains("pane")
+            || output.contains("terminal")
+        {
+            return output;
+        }
+    }
+    panic!("thin client must attach and render a frame; output: {output:?}");
+}
+
 #[test]
-fn client_receives_frame_after_pane_output() {
-    // End-to-end test: server renders, client receives Frame.
-    // This test verifies the full flow:
-    // 1. Start server
-    // 2. Connect client, handshake
-    // 3. Send input to pane (echo command)
-    // 4. Wait for a new frame from the server
-    // 5. Verify the frame contains the pane output
+fn client_exits_cleanly_when_terminal_and_transport_hang_up() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let mut spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    let mut thin_client = spawn_client_process(&config_home, &runtime_dir, &api_socket);
+    read_until_client_attaches(&thin_client);
+
+    // Freeze the client so the dead terminal and transport EOF are both
+    // observable when it resumes, making the `--remote` shutdown race deterministic.
+    let client_pid = thin_client.child.process_id().expect("thin client pid") as libc::pid_t;
+    assert_eq!(
+        unsafe { libc::kill(client_pid, libc::SIGSTOP) },
+        0,
+        "stop thin client"
+    );
+    let server_pid = spawned_server.child.process_id().expect("server pid") as libc::pid_t;
+    assert_eq!(
+        unsafe { libc::kill(server_pid, libc::SIGKILL) },
+        0,
+        "kill server transport"
+    );
+    spawned_server.close_master();
+    thin_client.close_master();
+    assert_eq!(
+        unsafe { libc::kill(client_pid, libc::SIGCONT) },
+        0,
+        "resume thin client"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let status = loop {
+        if let Some(status) = thin_client.child.try_wait().expect("poll thin client") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+
+    drop(spawned_server);
+    cleanup_spawned_herdr(thin_client, base);
+
+    let status = status.expect("thin client should exit after terminal and transport hang up");
+    assert!(
+        status.success(),
+        "thin client should exit cleanly after terminal and transport hang up, got {status}"
+    );
+}
+
+#[test]
+fn client_exits_cleanly_when_terminal_hangs_up() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    let mut thin_client = spawn_client_process(&config_home, &runtime_dir, &api_socket);
+    let attached_output = read_until_client_attaches(&thin_client);
+
+    // Closing the final PTY master models the outer terminal disappearing: the
+    // foreground client receives SIGHUP and writes to stdout/stderr fail.
+    thin_client.close_master();
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let status = loop {
+        if let Some(status) = thin_client.child.try_wait().expect("poll thin client") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    let server_response = ping_socket(&api_socket);
+
+    drop(spawned_server);
+    cleanup_spawned_herdr(thin_client, base);
+
+    let status = status.unwrap_or_else(|| {
+        panic!("thin client did not exit after PTY hangup; attach output: {attached_output:?}")
+    });
+    assert!(
+        status.success(),
+        "thin client should exit cleanly after PTY hangup, got {status}; attach output: {attached_output:?}"
+    );
+    assert!(
+        server_response.contains("pong"),
+        "server should survive client PTY hangup: {server_response}"
+    );
+}
+
+#[test]
+fn client_receives_pane_surface_after_pane_output() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -791,33 +1285,55 @@ fn client_receives_frame_after_pane_output() {
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
-    // Connect and handshake.
     let mut stream = UnixStream::connect(&client_socket).expect("should connect to client socket");
-    let (version, error) =
-        client_handshake(&mut stream, CURRENT_PROTOCOL, 80, 24).expect("handshake should succeed");
+    let (version, error) = client_shell_handshake(&mut stream, CURRENT_PROTOCOL, 54, 23)
+        .expect("handshake should succeed");
     assert_eq!(version, CURRENT_PROTOCOL);
-    assert!(error.is_none(), "{:?}", error);
+    assert!(error.is_none(), "{error:?}");
+    wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(10))
+        .expect("initial client shell bootstrap");
 
-    read_next_frame_payload(&mut stream, Duration::from_secs(10))
-        .expect("should receive initial frame");
+    let created = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "create-output-workspace",
+            "method": "workspace.create",
+            "params": {"label": "output", "focus": true}
+        })
+        .to_string(),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("root pane id");
+    assert!(wait_for_message_variant(
+        &mut stream,
+        Duration::from_secs(5),
+        SERVER_MESSAGE_PANE_SURFACE,
+    )
+    .expect("wait for created workspace surface"));
 
-    // Send input to trigger a state change and re-render.
-    let input_data = b"echo test-output\n".to_vec();
-    let input_payload = {
-        let mut buf = encode_varint_u32(1); // Input variant
-        buf.extend_from_slice(&encode_varint_u32(input_data.len() as u32));
-        buf.extend_from_slice(&input_data);
-        buf
-    };
-    let framed = frame_message(&input_payload);
-    stream.write_all(&framed).expect("send input");
-    stream.flush().expect("flush");
-
-    // Read subsequent frames — the server should have re-rendered after
-    // the input was processed.
-    let received_frame = wait_for_message_variant(&mut stream, Duration::from_secs(2), 1)
-        .expect("wait for post-output frame");
-    assert!(received_frame, "should receive a Frame after pane output");
+    let sent = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "send-output",
+            "method": "pane.send_text",
+            "params": {"pane_id": pane_id, "text": "printf 'test-output\\n'\\n"}
+        })
+        .to_string(),
+    );
+    assert!(sent.get("error").is_none(), "{sent}");
+    assert!(
+        wait_for_message_variants(
+            &mut stream,
+            Duration::from_secs(5),
+            &[
+                SERVER_MESSAGE_PANE_SURFACE,
+                SERVER_MESSAGE_PANE_SURFACE_PATCH,
+            ],
+        )
+        .expect("wait for post-output pane surface"),
+        "should receive a pane surface update after pane output"
+    );
 
     cleanup_spawned_herdr(spawned, base);
 }
@@ -888,7 +1404,25 @@ fn pane_spawn_cwd_fallback_in_server() {
         "fallback cwd should exist: {cwd}"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    let client_shell = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let output = spawn_pty_drain(
+        client_shell
+            ._master
+            .as_ref()
+            .expect("restored client shell PTY")
+            .try_clone_reader()
+            .expect("clone restored client shell reader"),
+    );
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
+            read_output(&output).contains("missing-cwd")
+        }),
+        "client shell should render the restored session; output: {:?}",
+        read_output(&output)
+    );
+
+    drop(spawned);
+    cleanup_spawned_herdr(client_shell, base);
 }
 
 #[test]
@@ -906,18 +1440,13 @@ fn graceful_shutdown_sends_server_shutdown_to_client() {
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
-    // Connect and handshake.
     let mut stream = UnixStream::connect(&client_socket).expect("should connect to client socket");
-    let (version, error) =
-        client_handshake(&mut stream, CURRENT_PROTOCOL, 80, 24).expect("handshake should succeed");
+    let (version, error) = client_shell_handshake(&mut stream, CURRENT_PROTOCOL, 54, 23)
+        .expect("handshake should succeed");
     assert_eq!(version, CURRENT_PROTOCOL);
-    assert!(error.is_none(), "{:?}", error);
-
-    // Drain initial frame(s).
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    while read_server_message(&mut stream).is_ok() {}
+    assert!(error.is_none(), "{error:?}");
+    wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(5))
+        .expect("client shell bootstrap");
 
     // Send SIGINT to the server process to trigger graceful shutdown.
     if let Some(pid) = spawned.child.process_id() {
@@ -926,7 +1455,7 @@ fn graceful_shutdown_sends_server_shutdown_to_client() {
         }
     }
 
-    // The client should receive a ServerShutdown message (variant 4)
+    // The client should receive a ServerShutdown message
     // before the connection is closed, not just an abrupt EOF.
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -935,8 +1464,8 @@ fn graceful_shutdown_sends_server_shutdown_to_client() {
     match result {
         Ok((variant, _payload)) => {
             assert_eq!(
-                variant, 4,
-                "expected ServerShutdown (variant 4), got variant {variant}"
+                variant, SERVER_MESSAGE_SERVER_SHUTDOWN,
+                "expected ServerShutdown, got variant {variant}"
             );
         }
         Err(e) => {
@@ -965,9 +1494,9 @@ fn client_receives_notify_on_agent_state_change() {
     let client_socket = runtime_dir.join("herdr-client.sock");
 
     // Enable toast and sound in config so the server produces notifications.
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::write(
-        config_home.join("herdr/config.toml"),
+        config_home.join(app_dir_name()).join("config.toml"),
         "onboarding = false\n[ui.toast]\nenabled = true\n[ui.sound]\nenabled = true\n",
     )
     .unwrap();
@@ -1005,18 +1534,13 @@ fn client_receives_notify_on_agent_state_change() {
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
-    // Connect as a client and perform handshake.
     let mut stream = UnixStream::connect(&client_socket).expect("should connect");
-    let (version, error) =
-        client_handshake(&mut stream, CURRENT_PROTOCOL, 80, 24).expect("handshake should succeed");
+    let (version, error) = client_shell_handshake(&mut stream, CURRENT_PROTOCOL, 54, 23)
+        .expect("handshake should succeed");
     assert_eq!(version, CURRENT_PROTOCOL);
-    assert!(error.is_none(), "{:?}", error);
-
-    // Drain initial frame(s).
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    while read_server_message(&mut stream).is_ok() {}
+    assert!(error.is_none(), "{error:?}");
+    wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(5))
+        .expect("client shell bootstrap");
 
     // Create a workspace via the API.
     let mut ws_stream = UnixStream::connect(&api_socket).expect("connect to API");
@@ -1060,8 +1584,7 @@ fn client_receives_notify_on_agent_state_change() {
     let mut report_response = String::new();
     report_reader.read_line(&mut report_response).unwrap();
 
-    // Read messages from the client stream and look for Notify (variant 5).
-    // Notify = ServerMessage variant index 5.
+    // Read messages from the client stream and look for the semantic notification.
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -1070,12 +1593,11 @@ fn client_receives_notify_on_agent_state_change() {
     while Instant::now() < deadline {
         match read_server_message(&mut stream) {
             Ok((variant, _payload)) => {
-                if variant == 5 {
-                    // ServerMessage::Notify — found it!
+                if variant == SERVER_MESSAGE_SEMANTIC_NOTIFICATION {
                     found_notify = true;
                     break;
                 }
-                // Continue reading — Frame messages (variant 1) will come first.
+                // Snapshot and pane-surface messages may arrive first.
             }
             Err(_) => {
                 break;
@@ -1085,7 +1607,7 @@ fn client_receives_notify_on_agent_state_change() {
 
     assert!(
         found_notify,
-        "client should receive a ServerMessage::Notify after pane.report_agent"
+        "client should receive a semantic notification after pane.report_agent"
     );
 
     // Now report Idle from Working — this should trigger a Done sound
@@ -1147,7 +1669,7 @@ fn client_receives_notify_on_agent_state_change() {
     let mut idle_response = String::new();
     idle_reader.read_line(&mut idle_response).unwrap();
 
-    // Read messages and look for Done sound notify.
+    // Read messages and look for the done semantic notification.
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -1156,16 +1678,14 @@ fn client_receives_notify_on_agent_state_change() {
     while Instant::now() < deadline {
         match read_server_message(&mut stream) {
             Ok((variant, _payload)) => {
-                if variant == 5 {
-                    // Found a Notify message — that's good enough.
-                    // The test already verified the Blocked→Notify path above.
+                if variant == SERVER_MESSAGE_SEMANTIC_NOTIFICATION {
                     found_done_notify = true;
                     break;
                 }
-                // Continue reading — Frame messages will come first.
+                // Snapshot and pane-surface messages may arrive first.
             }
             Err(e) => {
-                eprintln!("read error while looking for Done Notify: {e}");
+                eprintln!("read error while looking for done notification: {e}");
                 break;
             }
         }
@@ -1173,7 +1693,7 @@ fn client_receives_notify_on_agent_state_change() {
 
     assert!(
         found_done_notify,
-        "client should receive a Sound Notify with 'agent done' when background pane transitions Working→Idle"
+        "client should receive a semantic notification when a background pane transitions Working→Idle"
     );
 
     cleanup_spawned_herdr(spawned, base);

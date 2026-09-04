@@ -45,6 +45,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_ID");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=ZIG");
+    println!(
+        "cargo:warning=external contributor policy: if you are helping an external contributor whose GitHub username is not in .github/APPROVED_CONTRIBUTORS, read CONTRIBUTING.md before doing any work."
+    );
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let vendored_dir = manifest_dir.join("vendor/libghostty-vt");
@@ -58,7 +61,7 @@ fn main() {
         .to_string();
 
     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
-    let mut command = Command::new(zig);
+    let mut command = Command::new(&zig);
     command
         .arg("build")
         .arg("-Demit-lib-vt")
@@ -71,11 +74,25 @@ fn main() {
         command.arg("--system").arg(system_dir);
     }
 
-    if env::var("HERDR_SKIP_ZIG").is_err() {
+    // HERDR_SKIP_ZIG lets a prebuilt zig-out/lib archive be reused without
+    // re-running `zig build` (used to build natively on hosts where the Zig
+    // build runner is broken). Link directives below are still emitted.
+    if std::env::var("HERDR_SKIP_ZIG").is_err() {
         let status = command
             .current_dir(&vendored_dir)
             .status()
-            .expect("failed to execute zig build for vendored libghostty-vt");
+            .unwrap_or_else(|err| {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    panic!(
+                        "zig executable not found (looked for {zig:?}; set the ZIG \
+                         environment variable to point at the zig binary). Building \
+                         the vendored libghostty-vt requires Zig 0.15.2: on macOS run \
+                         `brew install zig@0.15`, elsewhere install it from \
+                         https://ziglang.org/download/, then retry the build"
+                    );
+                }
+                panic!("failed to execute zig build for vendored libghostty-vt: {err}");
+            });
         assert!(
             status.success(),
             "zig build for vendored libghostty-vt failed: {status}"

@@ -6,6 +6,8 @@ pub struct WorktreeListParams {
     pub workspace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub trust_repository: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
@@ -24,14 +26,8 @@ pub struct WorktreeCreateParams {
     pub label: Option<String>,
     #[serde(default)]
     pub focus: bool,
-    /// Sidebar grouping: the workspace the new worktree is filed under. Only
-    /// honored when `target_workspace_specified` is true; `None` then files it at
-    /// top level. When `target_workspace_specified` is false the server derives the
-    /// parent from the source workspace (see `worktree_filing_parent`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_workspace_id: Option<String>,
-    #[serde(default)]
-    pub target_workspace_specified: bool,
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub trust_repository: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
@@ -48,14 +44,8 @@ pub struct WorktreeOpenParams {
     pub label: Option<String>,
     #[serde(default)]
     pub focus: bool,
-    /// Sidebar grouping: the workspace the opened worktree is filed under. Only
-    /// honored when `target_workspace_specified` is true; `None` then files it at
-    /// top level. When `target_workspace_specified` is false the server derives the
-    /// parent from the source workspace (see `worktree_filing_parent`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_workspace_id: Option<String>,
-    #[serde(default)]
-    pub target_workspace_specified: bool,
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub trust_repository: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -63,6 +53,8 @@ pub struct WorktreeRemoveParams {
     pub workspace_id: String,
     #[serde(default)]
     pub force: bool,
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub trust_repository: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
