@@ -30,6 +30,8 @@ pub(crate) enum KeybindAction {
     WorkspacePicker,
     PreviousWorkspace,
     NextWorkspace,
+    MoveWorkspacePrevious,
+    MoveWorkspaceNext,
     PreviousAgent,
     NextAgent,
     NewTab,
@@ -109,6 +111,14 @@ pub(crate) fn resolve_non_indexed_action(
             KeybindAction::PreviousWorkspace,
         ),
         (&keybinds.next_workspace, KeybindAction::NextWorkspace),
+        (
+            &keybinds.move_workspace_previous,
+            KeybindAction::MoveWorkspacePrevious,
+        ),
+        (
+            &keybinds.move_workspace_next,
+            KeybindAction::MoveWorkspaceNext,
+        ),
         (&keybinds.previous_agent, KeybindAction::PreviousAgent),
         (&keybinds.next_agent, KeybindAction::NextAgent),
         (&keybinds.new_tab, KeybindAction::NewTab),

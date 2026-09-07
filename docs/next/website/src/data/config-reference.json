@@ -500,12 +500,6 @@
           "description": "Create a Git worktree from the selected workspace."
         },
         {
-          "key": "keys.move_worktree",
-          "type": "keybinding",
-          "default": "\"prefix+shift+m\"",
-          "description": "Move the selected worktree under another workspace."
-        },
-        {
           "key": "keys.open_worktree",
           "type": "keybinding",
           "default": "unset",
@@ -528,12 +522,6 @@
           "type": "keybinding",
           "default": "\"prefix+shift+d\"",
           "description": "Close the selected workspace."
-        },
-        {
-          "key": "keys.acknowledge",
-          "type": "keybinding",
-          "default": "\"prefix+shift+a\"",
-          "description": "Acknowledge the selected/active workspace, clearing its done markers so finished agents go back to idle without re-running them."
         },
         {
           "key": "keys.workspace_picker",
@@ -612,6 +600,18 @@
           "type": "keybinding",
           "default": "unset",
           "description": "Select the next workspace. Unset by default."
+        },
+        {
+          "key": "keys.move_workspace_previous",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Move the selected workspace up in the sidebar list. Unset by default."
+        },
+        {
+          "key": "keys.move_workspace_next",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Move the selected workspace down in the sidebar list. Unset by default."
         },
         {
           "key": "keys.previous_agent",
@@ -1505,12 +1505,6 @@
           "type": "boolean",
           "default": "false",
           "description": "While prefix mode is active, temporarily switch the host input source to an ASCII-capable mode so prefix commands are read as ASCII even when an IME is active, then restore the previous input source when prefix mode exits. On macOS this selects the ASCII-capable keyboard layout; on Windows it switches the IME to English (ASCII) input. Windows support is currently limited to the Korean IME; with an IME for any other language, the input source is left unchanged. macOS and Windows only; a no-op elsewhere and a best-effort no-op if the switch fails."
-        },
-        {
-          "key": "experimental.smart_pane_focus_editors",
-          "type": "array of strings",
-          "default": "empty",
-          "description": "tmux-navigator style pane focus. When a direct pane-focus keybinding (e.g. focus_pane_left = \"ctrl+h\") is pressed while the focused pane's foreground process is one of these editors, the key is forwarded to the pane so the editor's own window/split navigation works, instead of switching Herdr panes. Matched case-insensitively against the process executable basename (e.g. \"nvim\", \"vim\"). Empty disables the behavior. Pair it with an editor plugin that hands off to `herdr pane focus` at a split edge for seamless cross-pane navigation."
         }
       ]
     }

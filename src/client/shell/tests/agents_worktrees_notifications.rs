@@ -171,6 +171,128 @@ fn grouped_worktrees_render_parent_branch_and_indented_child() {
 }
 
 #[test]
+fn same_repo_non_linked_workspaces_stay_separate_top_level() {
+    // Two projects in one monorepo (same repo key, both non-linked checkouts)
+    // must render as separate top-level spaces, not nested into one group.
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "odyssey".into();
+    snapshot.workspaces[0].worktree = Some(ClientShellWorktree {
+        key: "monorepo".into(),
+        label: "monorepo".into(),
+        is_linked_worktree: false,
+    });
+    snapshot.workspaces.push(ClientShellWorkspace {
+        workspace_id: "ws_2".into(),
+        active_tab_id: "tab_ws2".into(),
+        new_workspace_cwd: "/repo/bifrost".into(),
+        number: 2,
+        label: "bifrost".into(),
+        custom_label: false,
+        branch: Some("main".into()),
+        git_ahead_behind: None,
+        tokens: Vec::new(),
+        worktree: Some(ClientShellWorktree {
+            key: "monorepo".into(),
+            label: "monorepo".into(),
+            is_linked_worktree: false,
+        }),
+        focused: false,
+        agent_status: AgentStatus::Idle,
+    });
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 20).expect("composed frame");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("odyssey"), "odyssey rendered");
+    assert!(text.contains("bifrost"), "bifrost rendered");
+    // No worktree-nesting glyphs: neither is indented under the other.
+    assert!(
+        !text.contains("└─") && !text.contains("├─"),
+        "same-repo non-linked workspaces must not nest:\n{text}"
+    );
+    // Both are top-level rows.
+    assert_eq!(state.hits.workspaces.len(), 2);
+}
+
+#[test]
+fn move_workspace_keybind_reorders_focused_project() {
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "a".into();
+    snapshot.workspaces[0].focused = false;
+    for (index, label) in [(2, "b"), (3, "c")] {
+        let mut workspace = snapshot.workspaces[0].clone();
+        workspace.workspace_id = format!("ws_{index}");
+        workspace.number = index;
+        workspace.label = label.into();
+        workspace.focused = index == 2;
+        snapshot.workspaces.push(workspace);
+    }
+    snapshot.focused_workspace_id = Some("ws_2".into());
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    // Move up: "b" lands before "a" via a single WorkspaceMove at index 0.
+    let mut up = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::MoveWorkspacePrevious),
+        &mut up,
+    );
+    assert!(
+        matches!(
+            &up.actions[..],
+            [ClientShellAction::Endpoint { request, .. }]
+                if matches!(
+                    &request.method,
+                    crate::api::schema::Method::WorkspaceMove(params)
+                        if params.workspace_id == "ws_2" && params.insert_index == 0
+                )
+        ),
+        "expected WorkspaceMove(ws_2 -> 0), got {:?}",
+        up.actions
+    );
+}
+
+#[test]
+fn move_workspace_keybind_at_top_is_noop() {
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut state = ClientShellState::new(config);
+    let snapshot = snapshot(); // single workspace ws_1, focused
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+    let mut up = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::MoveWorkspacePrevious),
+        &mut up,
+    );
+    assert!(
+        !up.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(
+                    request.method,
+                    crate::api::schema::Method::WorkspaceMove(_)
+                        | crate::api::schema::Method::WorkspaceMoveBlock(_)
+                )
+        )),
+        "top project must not emit a move: {:?}",
+        up.actions
+    );
+}
+
+#[test]
 fn workspace_click_waits_for_release_and_drag_reorders_by_stable_id() {
     let mut projected = snapshot();
     for index in 2..=3 {

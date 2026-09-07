@@ -505,7 +505,7 @@ impl ClientShellState {
             .map(|(_, target)| target)
     }
 
-    fn workspace_move_method(
+    pub(super) fn workspace_move_method(
         &self,
         source_workspace_id: &str,
         before_workspace_id: Option<&str>,
@@ -553,21 +553,29 @@ impl ClientShellState {
             return None;
         }
 
-        if let Some(worktree) = source.worktree.as_ref() {
-            let workspace_ids = std::iter::once(source.workspace_id.clone())
-                .chain(
-                    snapshot
-                        .workspaces
-                        .iter()
-                        .filter(|workspace| workspace.workspace_id != source.workspace_id)
-                        .filter(|workspace| {
-                            workspace
-                                .worktree
-                                .as_ref()
-                                .is_some_and(|candidate| candidate.key == worktree.key)
+        // Move the whole worktree block only when the source primary actually
+        // has linked worktrees. Non-linked workspaces that merely share a repo
+        // (monorepo subprojects) move singly, matching the sidebar grouping.
+        let linked_children = source
+            .worktree
+            .as_ref()
+            .map(|worktree| {
+                snapshot
+                    .workspaces
+                    .iter()
+                    .filter(|workspace| workspace.workspace_id != source.workspace_id)
+                    .filter(|workspace| {
+                        workspace.worktree.as_ref().is_some_and(|candidate| {
+                            candidate.is_linked_worktree && candidate.key == worktree.key
                         })
-                        .map(|workspace| workspace.workspace_id.clone()),
-                )
+                    })
+                    .map(|workspace| workspace.workspace_id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !linked_children.is_empty() {
+            let workspace_ids = std::iter::once(source.workspace_id.clone())
+                .chain(linked_children)
                 .collect();
             Some(crate::api::schema::Method::WorkspaceMoveBlock(
                 crate::api::schema::WorkspaceMoveBlockParams {

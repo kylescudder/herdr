@@ -455,66 +455,41 @@ pub(crate) fn workspace_entries(
     snapshot: &ClientShellSnapshot,
     collapsed_groups: &HashSet<String>,
 ) -> Vec<WorkspaceEntry> {
-    let mut members = HashMap::<&str, Vec<usize>>::new();
-    for (index, workspace) in snapshot.workspaces.iter().enumerate() {
-        if let Some(worktree) = &workspace.worktree {
-            members.entry(&worktree.key).or_default().push(index);
-        }
-    }
-    let grouped = members
-        .iter()
-        .filter(|(_, indices)| {
-            indices.len() >= 2
-                && indices.iter().any(|index| {
-                    snapshot.workspaces[*index]
-                        .worktree
-                        .as_ref()
-                        .is_some_and(|worktree| !worktree.is_linked_worktree)
-                })
-        })
-        .map(|(key, _)| *key)
-        .collect::<HashSet<_>>();
-    let mut emitted = HashSet::<&str>::new();
+    // Only actual `git worktree` checkouts (linked worktrees) nest under their
+    // repo's primary. Two non-linked workspaces that merely share a repo — e.g.
+    // separate projects in one monorepo — stay separate top-level entries.
+    let (parent_of, linked_children) = worktree_group_layout(snapshot);
+
     let mut entries = Vec::new();
     for (index, workspace) in snapshot.workspaces.iter().enumerate() {
-        let Some(worktree) = workspace
+        let key = workspace
             .worktree
             .as_ref()
-            .filter(|worktree| grouped.contains(worktree.key.as_str()))
-        else {
-            entries.push(WorkspaceEntry {
-                index,
-                indented: false,
-                last_child: false,
-            });
-            continue;
-        };
-        if !emitted.insert(&worktree.key) {
+            .map(|worktree| worktree.key.as_str());
+        // A linked worktree with a resolved primary is emitted beneath it below.
+        if key
+            .and_then(|key| parent_of.get(key))
+            .is_some_and(|parent| *parent != index)
+        {
             continue;
         }
-        let Some(group_members) = members.get(worktree.key.as_str()) else {
-            continue;
-        };
-        let parent = group_members
-            .iter()
-            .copied()
-            .find(|member| {
-                snapshot.workspaces[*member]
-                    .worktree
-                    .as_ref()
-                    .is_some_and(|worktree| !worktree.is_linked_worktree)
-            })
-            .unwrap_or(index);
         entries.push(WorkspaceEntry {
-            index: parent,
+            index,
             indented: false,
             last_child: false,
         });
-        if collapsed_groups.contains(&worktree.key) {
-            if let Some(active) = group_members
+        // If this workspace is a group's primary, emit its linked worktrees.
+        let Some(children) = key
+            .filter(|key| parent_of.get(*key) == Some(&index))
+            .and_then(|key| linked_children.get(key))
+        else {
+            continue;
+        };
+        if collapsed_groups.contains(key.unwrap_or_default()) {
+            if let Some(active) = children
                 .iter()
                 .copied()
-                .find(|member| *member != parent && snapshot.workspaces[*member].focused)
+                .find(|child| snapshot.workspaces[*child].focused)
             {
                 entries.push(WorkspaceEntry {
                     index: active,
@@ -524,11 +499,6 @@ pub(crate) fn workspace_entries(
             }
             continue;
         }
-        let children = group_members
-            .iter()
-            .copied()
-            .filter(|member| *member != parent)
-            .collect::<Vec<_>>();
         for (child_index, child) in children.iter().enumerate() {
             entries.push(WorkspaceEntry {
                 index: *child,
@@ -540,23 +510,54 @@ pub(crate) fn workspace_entries(
     entries
 }
 
+/// Resolves worktree groups: for each repo key that has both a primary
+/// (non-linked) checkout and at least one linked worktree, `parent_of` maps the
+/// key to its primary's index (the first in list order), and `linked_children`
+/// maps the key to its linked worktree indices in list order. Keys with only
+/// non-linked members (monorepo subprojects) produce no grouping.
+fn worktree_group_layout(
+    snapshot: &ClientShellSnapshot,
+) -> (HashMap<&str, usize>, HashMap<&str, Vec<usize>>) {
+    let mut linked_children = HashMap::<&str, Vec<usize>>::new();
+    for (index, workspace) in snapshot.workspaces.iter().enumerate() {
+        if let Some(worktree) = &workspace.worktree {
+            if worktree.is_linked_worktree {
+                linked_children
+                    .entry(&worktree.key)
+                    .or_default()
+                    .push(index);
+            }
+        }
+    }
+    let mut parent_of = HashMap::<&str, usize>::new();
+    for (index, workspace) in snapshot.workspaces.iter().enumerate() {
+        if let Some(worktree) = &workspace.worktree {
+            if !worktree.is_linked_worktree && linked_children.contains_key(worktree.key.as_str()) {
+                parent_of.entry(&worktree.key).or_insert(index);
+            }
+        }
+    }
+    // Drop linked-only keys with no primary so their worktrees render top-level.
+    linked_children.retain(|key, _| parent_of.contains_key(key));
+    (parent_of, linked_children)
+}
+
 fn parent_group_key(snapshot: &ClientShellSnapshot, index: usize) -> Option<String> {
     let workspace = snapshot.workspaces.get(index)?;
     let worktree = workspace.worktree.as_ref()?;
     if worktree.is_linked_worktree {
         return None;
     }
-    (snapshot
+    // Only a primary with at least one linked worktree is a collapsible group.
+    // Non-linked workspaces sharing a repo (monorepo subprojects) are not.
+    snapshot
         .workspaces
         .iter()
-        .filter(|candidate| {
-            candidate
-                .worktree
-                .as_ref()
-                .is_some_and(|candidate| candidate.key == worktree.key)
+        .any(|candidate| {
+            candidate.worktree.as_ref().is_some_and(|candidate| {
+                candidate.is_linked_worktree && candidate.key == worktree.key
+            })
         })
-        .count()
-        >= 2)
         .then(|| worktree.key.clone())
 }
 
@@ -579,12 +580,12 @@ fn displayed_workspace_status(
         .workspaces
         .iter()
         .filter(|candidate| {
-            candidate
-                .worktree
-                .as_ref()
-                .is_some_and(|candidate| candidate.key == worktree.key)
+            candidate.worktree.as_ref().is_some_and(|candidate| {
+                candidate.is_linked_worktree && candidate.key == worktree.key
+            })
         })
         .map(|candidate| candidate.agent_status)
+        .chain(std::iter::once(workspace.agent_status))
         .max_by_key(|status| status_priority(*status))
         .unwrap_or(workspace.agent_status)
 }
