@@ -1042,11 +1042,14 @@ impl Default for KeysConfig {
             close_workspace: BindingConfig::one("prefix+shift+d"),
             workspace_picker: BindingConfig::one("prefix+w"),
             goto: BindingConfig::one("prefix+g"),
-            navigate_workspace_up: BindingConfig::one("up"),
-            navigate_workspace_down: BindingConfig::one("down"),
+            navigate_workspace_up: BindingConfig::Many(vec!["up".into(), "k".into()]),
+            navigate_workspace_down: BindingConfig::Many(vec!["down".into(), "j".into()]),
             navigate_pane_left: BindingConfig::one("h"),
-            navigate_pane_down: BindingConfig::one("j"),
-            navigate_pane_up: BindingConfig::one("k"),
+            // j/k drive workspace-list navigation in Navigate mode (see
+            // navigate_workspace_up/down); leave pane up/down unbound so they
+            // don't collide. Pane left/right (h/l) still focus panes.
+            navigate_pane_down: BindingConfig::empty(),
+            navigate_pane_up: BindingConfig::empty(),
             navigate_pane_right: BindingConfig::one("l"),
             detach: BindingConfig::one("prefix+q"),
             reload_config: BindingConfig::one("prefix+shift+r"),
