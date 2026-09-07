@@ -266,6 +266,45 @@ fn move_workspace_keybind_reorders_focused_project() {
 }
 
 #[test]
+fn navigate_mode_shift_k_reorders_selected_project_in_place() {
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "a".into();
+    for (index, label) in [(2, "b"), (3, "c")] {
+        let mut ws = snapshot.workspaces[0].clone();
+        ws.workspace_id = format!("ws_{index}");
+        ws.number = index;
+        ws.label = label.into();
+        ws.focused = false;
+        snapshot.workspaces.push(ws);
+    }
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    state.handle_input_bytes(&[0x02]); // ctrl+b (prefix)
+    state.handle_input_bytes(b"w"); // enter Navigate mode (selects ws_1)
+    state.handle_input_bytes(b"j"); // move selection down -> ws_2 ("b")
+    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
+
+    // shift+k reorders "b" up, before "a", without leaving Navigate mode.
+    let reordered = state.handle_input_bytes(b"K");
+    let [ClientShellAction::Endpoint { request, .. }] = &reordered.actions[..] else {
+        panic!("expected a reorder endpoint, got {:?}", reordered.actions);
+    };
+    assert!(
+        matches!(
+            &request.method,
+            crate::api::schema::Method::WorkspaceMove(params)
+                if params.workspace_id == "ws_2" && params.insert_index == 0
+        ),
+        "got {:?}",
+        request.method
+    );
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
+}
+
+#[test]
 fn move_workspace_keybind_at_top_is_noop() {
     let config = ClientShellConfig::from_config(&Config::default());
     let mut state = ClientShellState::new(config);

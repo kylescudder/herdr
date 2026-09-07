@@ -863,6 +863,57 @@ impl ClientShellState {
         (repaint, Vec::new())
     }
 
+    /// Builds the move for reordering the project owning `source_workspace_id`
+    /// one slot among the top-level (non-linked) roots. `up` moves it toward the
+    /// front. A worktree child moves its whole group via its primary. Reuses the
+    /// sidebar drag's move builder so grouping and block moves stay consistent.
+    /// No-op (`None`) at the list ends.
+    pub(super) fn workspace_reorder_method(
+        &self,
+        source_workspace_id: &str,
+        up: bool,
+    ) -> Option<crate::api::schema::Method> {
+        let snapshot = self.snapshot.as_deref()?;
+        let source = snapshot
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == source_workspace_id)?;
+        let source_root = match source.worktree.as_ref() {
+            Some(worktree) if worktree.is_linked_worktree => snapshot
+                .workspaces
+                .iter()
+                .find(|candidate| {
+                    candidate.worktree.as_ref().is_some_and(|candidate| {
+                        !candidate.is_linked_worktree && candidate.key == worktree.key
+                    })
+                })
+                .map(|primary| primary.workspace_id.clone())?,
+            _ => source.workspace_id.clone(),
+        };
+        let roots = snapshot
+            .workspaces
+            .iter()
+            .filter(|workspace| {
+                !workspace
+                    .worktree
+                    .as_ref()
+                    .is_some_and(|worktree| worktree.is_linked_worktree)
+            })
+            .map(|workspace| workspace.workspace_id.as_str())
+            .collect::<Vec<_>>();
+        let position = roots.iter().position(|id| *id == source_root)?;
+        let before = if up {
+            // Land before the previous root. No-op at the top.
+            Some(roots.get(position.checked_sub(1)?)?.to_string())
+        } else {
+            // Jump the next root; land before the one after it, or append when
+            // the next root is last. No-op at the bottom.
+            roots.get(position + 1)?;
+            roots.get(position + 2).map(|id| id.to_string())
+        };
+        self.workspace_move_method(&source_root, before.as_deref())
+    }
+
     pub(super) fn endpoint_method_for_action(
         &mut self,
         action: crate::input::KeybindAction,
@@ -968,50 +1019,11 @@ impl ClientShellState {
                 self.reveal_workspace(&workspace_id);
                 Some(Method::WorkspaceFocus(WorkspaceTarget { workspace_id }))
             }
-            KeybindAction::MoveWorkspacePrevious | KeybindAction::MoveWorkspaceNext => {
-                // Reorder the focused project one slot among the top-level
-                // (non-linked) roots. A focused worktree child moves its whole
-                // group via its primary. Delegates to the same move builder the
-                // sidebar drag uses, so grouping and block moves stay consistent.
-                let focused = snapshot
-                    .workspaces
-                    .iter()
-                    .find(|workspace| workspace.workspace_id == focused_workspace)?;
-                let source_root = match focused.worktree.as_ref() {
-                    Some(worktree) if worktree.is_linked_worktree => snapshot
-                        .workspaces
-                        .iter()
-                        .find(|candidate| {
-                            candidate.worktree.as_ref().is_some_and(|candidate| {
-                                !candidate.is_linked_worktree && candidate.key == worktree.key
-                            })
-                        })
-                        .map(|primary| primary.workspace_id.clone())?,
-                    _ => focused.workspace_id.clone(),
-                };
-                let roots = snapshot
-                    .workspaces
-                    .iter()
-                    .filter(|workspace| {
-                        !workspace
-                            .worktree
-                            .as_ref()
-                            .is_some_and(|worktree| worktree.is_linked_worktree)
-                    })
-                    .map(|workspace| workspace.workspace_id.as_str())
-                    .collect::<Vec<_>>();
-                let position = roots.iter().position(|id| *id == source_root)?;
-                let before = if action == KeybindAction::MoveWorkspacePrevious {
-                    // Move up: land before the previous root. No-op at the top.
-                    Some(roots.get(position.checked_sub(1)?)?.to_string())
-                } else {
-                    // Move down: jump the next root; land before the one after
-                    // it, or append when the next root is last. No-op at bottom.
-                    roots.get(position + 1)?;
-                    roots.get(position + 2).map(|id| id.to_string())
-                };
-                self.workspace_move_method(&source_root, before.as_deref())
-            }
+            KeybindAction::MoveWorkspacePrevious | KeybindAction::MoveWorkspaceNext => self
+                .workspace_reorder_method(
+                    &focused_workspace,
+                    action == KeybindAction::MoveWorkspacePrevious,
+                ),
             KeybindAction::SwitchTab(index) => {
                 let tabs = snapshot
                     .tabs

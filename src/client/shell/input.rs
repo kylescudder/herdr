@@ -652,6 +652,26 @@ impl ClientShellState {
             return;
         }
 
+        // shift+k / shift+j reorder the selected project up / down in place, so
+        // prefix+w then j/k to select and shift+j/k to move stays in one mode.
+        let reorder_up = crate::config::terminal_key_matches_combo(
+            key,
+            (KeyCode::Char('k'), KeyModifiers::SHIFT),
+        );
+        let reorder_down = crate::config::terminal_key_matches_combo(
+            key,
+            (KeyCode::Char('j'), KeyModifiers::SHIFT),
+        );
+        if reorder_up || reorder_down {
+            if let Some(workspace_id) = self.navigate_workspace_id.clone() {
+                if let Some(method) = self.workspace_reorder_method(&workspace_id, reorder_up) {
+                    self.push_endpoint_method(method, outcome);
+                }
+            }
+            outcome.repaint = true;
+            return;
+        }
+
         if let Some(index) = ('1'..='9').position(|digit| {
             crate::config::terminal_key_matches_combo(
                 key,
