@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## [0.9.0] - 2026-09-09
+
+### Changed
+- Synced with upstream herdr: the terminal UI is rebuilt on the new server/client shell architecture, bringing ~1 month of upstream work — 24 features and 148 fixes, including independent multi-client tab views, per-mode theme overrides, general Windows availability, configurable headless terminal size, and broad input/client/installer fixes.
+
+### Added
+- Monorepo grouping: two projects in the same repository (same repo, both non-linked checkouts) now stay as separate top-level spaces instead of collapsing into one group. Only actual linked git worktrees nest under their primary.
+- Reorder projects from the keyboard: in the workspace picker (`prefix+w`), `shift+k`/`shift+j` move the selected project up/down in place. `keys.move_workspace_previous` / `keys.move_workspace_next` reorder the focused project from a pane (unset by default). Worktree groups move as one block.
+- Navigate the workspace list with `j`/`k` in the picker (in addition to the arrow keys).
+
 ## [0.8.10] - 2026-09-04
 
 ### Added
