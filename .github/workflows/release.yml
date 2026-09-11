@@ -128,10 +128,16 @@ jobs:
 
       - name: Install Linux build tools
         if: runner.os == 'Linux'
+        # A single wedged apt mirror used to hang this step indefinitely (the
+        # job has no timeout of its own, so it burned 30+ minutes and then took
+        # the release job down with it). Retry, cap the per-connection wait, and
+        # fail fast enough to be worth rerunning.
+        timeout-minutes: 12
         run: |
           sudo find /etc/apt/sources.list.d -type f \( -iname '*microsoft*' -o -iname '*azure-cli*' \) -print -delete
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build musl-tools gcc-aarch64-linux-gnu crossbuild-essential-arm64
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          sudo apt-get update $apt_opts
+          sudo apt-get install -y $apt_opts cmake ninja-build musl-tools gcc-aarch64-linux-gnu crossbuild-essential-arm64
 
       - name: Install macOS build tools
         if: runner.os == 'macOS'
