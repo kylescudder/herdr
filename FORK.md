@@ -6,7 +6,10 @@ file exists so re-applying them after an upstream merge takes **minutes**.
 ## The one rule
 
 **Never re-implement a fork feature from notes or a summary.** Replay the real
-commits (merge, cherry-pick, or a patch from `fork/patches/`).
+commits: merge, or `git cherry-pick` them onto the new upstream. If upstream has
+rewritten a file so heavily that a commit cannot apply, export it first
+(`git format-patch`) and port it hunk by hunk against the real diff — never from
+a description of what it used to do.
 
 A past sync used "reset `src/` to upstream, then re-port from notes". It lost
 the original design — the move-to-workspace **modal picker** came back as a
@@ -107,7 +110,7 @@ Native macOS builds cannot run `zig build` on recent SDKs, so `build.rs` honours
 `HERDR_SKIP_ZIG=1` against a prebuilt archive. Keep that escape hatch when
 merging upstream `build.rs`.
 
-Three tests fail in the Linux dev container for environmental reasons, not code:
+These tests fail in the Linux dev container for environmental reasons, not code:
 
 - `live_handoff` binary — devpts
 - `inactive_owner_cancels_idle_stream_and_dispatches_close` — concurrency timing
@@ -124,6 +127,12 @@ Exclude with:
 -E 'not binary(live_handoff)
     and not test(inactive_owner_cancels_idle_stream_and_dispatches_close)
     and not test(unreadable_loose_ref_dir_is_unavailable_not_absent)'
+```
+
+`actor_delays_enter_from_completed_prompt_write` is left in, since it usually
+passes; re-run it alone if it trips.
+
+```
 ```
 
 The maintenance scripts need Python 3.11+ (`tomllib`); macOS system Python 3.9
