@@ -38,6 +38,40 @@ impl ClientShellState {
     ) -> bool {
         let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
         match self.overlay.as_ref() {
+            Some(ClientShellOverlay::MoveWorkspace(_)) => {
+                let moving = matches!(
+                    self.overlay,
+                    Some(ClientShellOverlay::MoveWorkspace(
+                        ClientMoveWorkspaceOverlay { moving: true, .. }
+                    ))
+                );
+                match code {
+                    KeyCode::Esc if !moving => {
+                        self.overlay = None;
+                        outcome.repaint = true;
+                    }
+                    KeyCode::Enter => self.submit_move_workspace(outcome),
+                    // j/k alongside the arrows, matching the original picker.
+                    KeyCode::Up | KeyCode::Char('k') if !moving => {
+                        if let Some(ClientShellOverlay::MoveWorkspace(move_overlay)) =
+                            self.overlay.as_mut()
+                        {
+                            move_overlay.move_selection(-1);
+                        }
+                        outcome.repaint = true;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if !moving => {
+                        if let Some(ClientShellOverlay::MoveWorkspace(move_overlay)) =
+                            self.overlay.as_mut()
+                        {
+                            move_overlay.move_selection(1);
+                        }
+                        outcome.repaint = true;
+                    }
+                    _ => {}
+                }
+                true
+            }
             Some(ClientShellOverlay::WorktreeCreate(_)) => {
                 let creating = matches!(
                     self.overlay,
@@ -379,6 +413,92 @@ impl ClientShellState {
         outcome.repaint = true;
     }
 
+    /// Opens the "move to workspace" picker for `workspace_id`. Candidates are
+    /// "top level" (unfile) plus every other workspace; the server rejects
+    /// cycles and the message is surfaced in the overlay.
+    pub(super) fn open_move_workspace_overlay(&mut self, workspace_id: String) -> bool {
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return false;
+        };
+        let Some(moving) = snapshot
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == workspace_id)
+        else {
+            return false;
+        };
+        let label = moving.label.clone();
+        let current_parent = moving
+            .tokens
+            .iter()
+            .find(|(name, _)| name == crate::protocol::PARENT_WORKSPACE_TOKEN)
+            .map(|(_, value)| value.clone());
+
+        let mut entries = vec![ClientMoveWorkspaceTarget {
+            target_id: None,
+            label: "top level".to_owned(),
+        }];
+        entries.extend(
+            snapshot
+                .workspaces
+                .iter()
+                .filter(|candidate| candidate.workspace_id != workspace_id)
+                .map(|candidate| ClientMoveWorkspaceTarget {
+                    target_id: Some(candidate.workspace_id.clone()),
+                    label: candidate.label.clone(),
+                }),
+        );
+        // Start on the current parent so the picker shows where it is filed now.
+        let selected = current_parent
+            .as_deref()
+            .and_then(|parent| {
+                entries
+                    .iter()
+                    .position(|entry| entry.target_id.as_deref() == Some(parent))
+            })
+            .unwrap_or(0);
+
+        self.overlay = Some(ClientShellOverlay::MoveWorkspace(
+            ClientMoveWorkspaceOverlay {
+                workspace_id,
+                label,
+                entries,
+                selected,
+                error: None,
+                moving: false,
+            },
+        ));
+        true
+    }
+
+    pub(super) fn submit_move_workspace(&mut self, outcome: &mut ClientShellInput) {
+        let Some(ClientShellOverlay::MoveWorkspace(move_overlay)) = self.overlay.as_mut() else {
+            return;
+        };
+        if move_overlay.moving {
+            return;
+        }
+        let workspace_id = move_overlay.workspace_id.clone();
+        let parent_workspace_id = move_overlay.selected_target_id();
+        move_overlay.moving = true;
+        move_overlay.error = None;
+        if !self.push_endpoint_method_with_kind(
+            crate::api::schema::Method::WorkspaceReparent(
+                crate::api::schema::WorkspaceReparentParams {
+                    workspace_id,
+                    parent_workspace_id,
+                },
+            ),
+            PendingEndpointKind::MoveWorkspace,
+            outcome,
+        ) {
+            if let Some(ClientShellOverlay::MoveWorkspace(move_overlay)) = self.overlay.as_mut() {
+                move_overlay.moving = false;
+            }
+        }
+        outcome.repaint = true;
+    }
+
     pub(super) fn handle_worktree_endpoint_result(
         &mut self,
         kind: PendingEndpointKind,
@@ -486,6 +606,18 @@ impl ClientShellState {
                 Ok(ResponseResult::WorktreeRemoved { .. }),
             ) => {
                 self.overlay = None;
+                true
+            }
+            (PendingEndpointKind::MoveWorkspace, Ok(ResponseResult::WorkspaceList { .. })) => {
+                self.overlay = None;
+                true
+            }
+            (PendingEndpointKind::MoveWorkspace, Err(error)) => {
+                if let Some(ClientShellOverlay::MoveWorkspace(move_overlay)) = self.overlay.as_mut()
+                {
+                    move_overlay.moving = false;
+                    move_overlay.error = Some(error.message);
+                }
                 true
             }
             (PendingEndpointKind::WorktreeCreate, Err(error)) => {

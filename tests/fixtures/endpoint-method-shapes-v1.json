@@ -32,6 +32,7 @@
   "workspace.move": "1d8d308b3a6f878ef36232c7776a6d78e9ffb05f0ff3bdb52476d3a71a98208a",
   "workspace.move_block": "1c1fdf3cd9387152e09d676830998f961cf80143704940da4dc88b5c7cb639a9",
   "workspace.rename": "0e00bc779c367ef3e7a154c63b9bbbf9b9bcaa9b198450f5c479f9b9956fa7cb",
+  "workspace.reparent": "67f16cd67dca7ee637071c7b7e1cd3d9bf06b95201f5804d683cd21ef6d937b5",
   "worktree.create": "e5cca6546ace513fa2f6ca48c2ec7bc3eebcd589feeb6b97b9d16fd415037399",
   "worktree.list": "b0ee8d77a954fdd418f7719074b07484294ee1395cb4dc6e38ab831a5ffac000",
   "worktree.open": "5ea3b41d74b095c12bf342cd5cde3f23e2e1b9c71281dfb7138e929484b26fae",

@@ -298,6 +298,133 @@ pub(super) fn render_worktree_open_overlay(
     })
 }
 
+pub(super) fn render_move_workspace_overlay(
+    b: &mut Buffer,
+    move_overlay: &ClientMoveWorkspaceOverlay,
+    p: &Palette,
+) -> Option<OverlayRender> {
+    const MAX_ROWS: usize = 8;
+    let visible = move_overlay.entries.len().clamp(1, MAX_ROWS);
+    let popup = popup(b.area, 64, visible as u16 + 8)?;
+    let inner = panel(b, popup, p.accent, p.panel_bg)?;
+    put_text(
+        b,
+        inner.x,
+        inner.y,
+        inner.width,
+        &format!(" move {} to…", move_overlay.label),
+        Style::default()
+            .fg(p.text)
+            .bg(p.panel_bg)
+            .add_modifier(Modifier::BOLD),
+    );
+    put_text(
+        b,
+        inner.x,
+        inner.y + 1,
+        inner.width,
+        " Pick the workspace to file it under.",
+        Style::default().fg(p.subtext0).bg(p.panel_bg),
+    );
+
+    // Scroll so the selected row stays visible for long workspace lists.
+    let first = move_overlay
+        .selected
+        .saturating_sub(visible.saturating_sub(1));
+    let mut row_hits = Vec::new();
+    for (offset, index) in (first..move_overlay.entries.len())
+        .take(visible)
+        .enumerate()
+    {
+        let entry = &move_overlay.entries[index];
+        let selected = index == move_overlay.selected;
+        row_hits.push((
+            Rect::new(inner.x, inner.y + 3 + offset as u16, inner.width, 1),
+            index,
+        ));
+        let style = if selected {
+            Style::default()
+                .fg(contrast(p))
+                .bg(p.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(p.text).bg(p.panel_bg)
+        };
+        let marker = if selected { "▸" } else { " " };
+        put_text(
+            b,
+            inner.x,
+            inner.y + 3 + offset as u16,
+            inner.width,
+            &format!(" {marker} {}", entry.label),
+            style,
+        );
+    }
+
+    let status_y = inner.y + 3 + visible as u16;
+    if move_overlay.moving {
+        put_text(
+            b,
+            inner.x,
+            status_y,
+            inner.width,
+            " moving…",
+            Style::default().fg(p.accent).bg(p.panel_bg),
+        );
+    } else if let Some(error) = move_overlay.error.as_deref() {
+        put_text(
+            b,
+            inner.x,
+            status_y,
+            inner.width,
+            &format!(" {error}"),
+            Style::default().fg(p.red).bg(p.panel_bg),
+        );
+    } else {
+        put_text(
+            b,
+            inner.x,
+            status_y,
+            inner.width,
+            " ↑/↓ or j/k to choose",
+            Style::default().fg(p.subtext0).bg(p.panel_bg),
+        );
+    }
+
+    let buttons = row(inner, &[14, 12], 2, inner.height.saturating_sub(1));
+    let [primary, cancel] = buttons.as_slice() else {
+        return None;
+    };
+    button(
+        b,
+        *primary,
+        " ↵ move ",
+        Style::default()
+            .fg(contrast(p))
+            .bg(p.accent)
+            .add_modifier(Modifier::BOLD),
+    );
+    button(
+        b,
+        *cancel,
+        " esc cancel ",
+        Style::default()
+            .fg(p.text)
+            .bg(p.surface0)
+            .add_modifier(Modifier::BOLD),
+    );
+    Some(OverlayRender {
+        primary: *primary,
+        cancel: *cancel,
+        clear: Rect::default(),
+        // Reuses the worktree row hit channel; the mouse router dispatches on
+        // the active overlay, so the rows cannot be confused with another's.
+        worktree_rows: row_hits,
+        cursor: None,
+        ..OverlayRender::default()
+    })
+}
+
 pub(super) fn render_worktree_remove_overlay(
     b: &mut Buffer,
     remove: &ClientWorktreeRemoveOverlay,

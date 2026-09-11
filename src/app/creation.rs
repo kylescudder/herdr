@@ -399,6 +399,11 @@ impl App {
                     checkout_path: space.checkout_path.display().to_string(),
                     is_linked_worktree: space.is_linked_worktree,
                 }),
+            parent_workspace_id: ws
+                .parent_workspace_id
+                .as_deref()
+                .filter(|parent| *parent != crate::protocol::EXPLICIT_TOP_LEVEL_PARENT)
+                .map(str::to_owned),
         }
     }
 }

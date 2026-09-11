@@ -22,6 +22,7 @@ pub(crate) enum KeybindAction {
     NewWorktree,
     OpenWorktree,
     RemoveWorktree,
+    MoveWorktreeToWorkspace,
     RenameWorkspace,
     CloseWorkspace,
     SwitchWorkspace(usize),
@@ -104,6 +105,10 @@ pub(crate) fn resolve_non_indexed_action(
         (&keybinds.new_worktree, KeybindAction::NewWorktree),
         (&keybinds.open_worktree, KeybindAction::OpenWorktree),
         (&keybinds.remove_worktree, KeybindAction::RemoveWorktree),
+        (
+            &keybinds.move_worktree,
+            KeybindAction::MoveWorktreeToWorkspace,
+        ),
         (&keybinds.rename_workspace, KeybindAction::RenameWorkspace),
         (&keybinds.close_workspace, KeybindAction::CloseWorkspace),
         (
@@ -267,6 +272,57 @@ mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
 
     use super::*;
+
+    #[test]
+    fn move_worktree_resolves_from_default_prefix_binding() {
+        let config = crate::config::Config::default();
+        let (live, _diagnostics) = config
+            .live_keybinds_with_diagnostics()
+            .expect("default keybinds must be valid");
+
+        // A shifted letter can reach the client as either representation.
+        let lower_shift = TerminalKey::new(KeyCode::Char('m'), KeyModifiers::SHIFT);
+        let upper_plain = TerminalKey::new(KeyCode::Char('M'), KeyModifiers::empty());
+        let upper_shift = TerminalKey::new(KeyCode::Char('M'), KeyModifiers::SHIFT);
+
+        for key in [&lower_shift, &upper_plain, &upper_shift] {
+            assert!(
+                matches!(
+                    resolve_prefix_binding(&live.keybinds, key),
+                    Some(KeybindMatch::Action(KeybindAction::MoveWorktreeToWorkspace))
+                ),
+                "prefix+shift+m must resolve to MoveWorktreeToWorkspace for {key:?}, got {:?}",
+                resolve_prefix_binding(&live.keybinds, key)
+            );
+        }
+    }
+
+    #[test]
+    fn move_worktree_resolves_when_user_overrides_reorder_keys() {
+        // Mirrors a real user config: only the workspace-reorder keys are
+        // overridden. The move_worktree default (prefix+shift+m) must survive
+        // the merge for un-configured fields.
+        let config: crate::config::Config = toml::from_str(
+            "onboarding = false\n\
+             [keys]\n\
+             move_workspace_previous = \"prefix+shift+k\"\n\
+             move_workspace_next = \"prefix+shift+j\"\n",
+        )
+        .expect("config parses");
+        let (live, _diagnostics) = config
+            .live_keybinds_with_diagnostics()
+            .expect("default keybinds must be valid");
+
+        let key = TerminalKey::new(KeyCode::Char('m'), KeyModifiers::SHIFT);
+        assert!(
+            matches!(
+                resolve_prefix_binding(&live.keybinds, &key),
+                Some(KeybindMatch::Action(KeybindAction::MoveWorktreeToWorkspace))
+            ),
+            "prefix+shift+m must still resolve when the user overrides other keys, got {:?}",
+            resolve_prefix_binding(&live.keybinds, &key)
+        );
+    }
 
     #[test]
     fn one_shared_resolver_handles_direct_prefix_and_indexed_bindings() {

@@ -57,6 +57,7 @@ Workspaces and session:
 | New workspace | `prefix+shift+n` |
 | Rename workspace | `prefix+shift+w` |
 | Close workspace | `prefix+shift+d` |
+| Move workspace to another | `prefix+shift+m` |
 | Goto picker | `prefix+g` |
 | Toggle sidebar | `prefix+b` |
 
@@ -67,6 +68,8 @@ The full keymap and the binding syntax live in the [keybinding reference](/docs/
 Press `prefix+g` to open the session navigator: a searchable tree of every workspace, tab, and pane. Move the selection with `j`/`k` or the arrow keys, press `/` to search and `b/w/i/d/a` to filter by agent state, Space to fold or unfold a workspace, and Enter to jump to the highlighted row.
 
 Reorder projects without leaving the keyboard: with a row selected in the unfiltered list, press `shift+k` to move its workspace up and `shift+j` to move it down, so the projects you use most can sit at the top regardless of when they were opened. A worktree group moves as a single block. This is the keyboard equivalent of dragging a workspace in the sidebar, and the same `shift+k` / `shift+j` reorder works in the sidebar workspace picker (`prefix+w`).
+
+Nest a workspace under another by filing it as a child: press `prefix+shift+m` on the workspace you want to move, then pick a target with `j`/`k` and press Enter to file the source beneath it. The source and its own worktrees move as a block and render indented under the chosen parent, so you can group related projects — for example several workspaces of one monorepo — even when git can't infer the relationship. Pressing Enter on the source itself unfiles it back to the top level, and Esc cancels without moving anything. The same reparent is available from a workspace's right-click menu ("Move to workspace").
 
 ## Copy mode
 

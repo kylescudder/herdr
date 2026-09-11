@@ -1005,6 +1005,9 @@ impl App {
             Method::WorkspaceMoveBlock(params) => {
                 return self.handle_workspace_move_block(request.id, params);
             }
+            Method::WorkspaceReparent(params) => {
+                return self.handle_workspace_reparent(request.id, params);
+            }
             Method::WorkspaceReportMetadata(params) => {
                 return self.handle_workspace_report_metadata(request.id, params);
             }

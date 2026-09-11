@@ -1,3 +1,4 @@
+use super::super::workspace_grouping::WorkspaceGrouping;
 use super::*;
 use ratatui::{
     text::Line,
@@ -207,7 +208,10 @@ pub(crate) fn render_sidebar(
             .add_modifier(Modifier::BOLD),
     );
 
-    let entries = workspace_entries(snapshot, state.collapsed_groups);
+    // Computed once: this is the pane-scaled render path, and the per-row
+    // helpers below would otherwise each rebuild the whole layout.
+    let grouping = WorkspaceGrouping::compute(snapshot);
+    let entries = grouping.entries(snapshot, state.collapsed_groups);
     let body = Rect::new(
         workspace_area.x,
         workspace_area.y.saturating_add(WORKSPACE_HEADER_ROWS),
@@ -226,7 +230,13 @@ pub(crate) fn render_sidebar(
                 .map(|workspace| {
                     workspace_rows(
                         workspace,
-                        displayed_workspace_status(snapshot, workspace, state.collapsed_groups),
+                        displayed_workspace_status(
+                            &grouping,
+                            snapshot,
+                            workspace,
+                            entry.index,
+                            state.collapsed_groups,
+                        ),
                         entry.indented,
                         &config.spaces,
                     )
@@ -284,7 +294,13 @@ pub(crate) fn render_sidebar(
         let Some(workspace) = snapshot.workspaces.get(entry.index) else {
             continue;
         };
-        let status = displayed_workspace_status(snapshot, workspace, state.collapsed_groups);
+        let status = displayed_workspace_status(
+            &grouping,
+            snapshot,
+            workspace,
+            entry.index,
+            state.collapsed_groups,
+        );
         let rows = workspace_rows(workspace, status, entry.indented, &config.spaces);
         let row_height = (rows.len().max(1).min(u16::MAX as usize) as u16).min(body.height);
         if y.saturating_add(row_height) > body.bottom() {
@@ -312,7 +328,7 @@ pub(crate) fn render_sidebar(
             dragged,
             palette,
         );
-        let group_toggle = parent_group_key(snapshot, entry.index).map(|key| {
+        let group_toggle = grouping.group_key(snapshot, entry.index).map(|key| {
             let rect = Rect::new(rect.right().saturating_sub(1), rect.y, 1, 1);
             put_text(
                 buffer,
@@ -451,140 +467,23 @@ pub(crate) fn render_sidebar_background(buffer: &mut Buffer, area: Rect, palette
     }
 }
 
-pub(crate) fn workspace_entries(
-    snapshot: &ClientShellSnapshot,
-    collapsed_groups: &HashSet<String>,
-) -> Vec<WorkspaceEntry> {
-    // Only actual `git worktree` checkouts (linked worktrees) nest under their
-    // repo's primary. Two non-linked workspaces that merely share a repo — e.g.
-    // separate projects in one monorepo — stay separate top-level entries.
-    let (parent_of, linked_children) = worktree_group_layout(snapshot);
-
-    let mut entries = Vec::new();
-    for (index, workspace) in snapshot.workspaces.iter().enumerate() {
-        let key = workspace
-            .worktree
-            .as_ref()
-            .map(|worktree| worktree.key.as_str());
-        // A linked worktree with a resolved primary is emitted beneath it below.
-        if key
-            .and_then(|key| parent_of.get(key))
-            .is_some_and(|parent| *parent != index)
-        {
-            continue;
-        }
-        entries.push(WorkspaceEntry {
-            index,
-            indented: false,
-            last_child: false,
-        });
-        // If this workspace is a group's primary, emit its linked worktrees.
-        let Some(children) = key
-            .filter(|key| parent_of.get(*key) == Some(&index))
-            .and_then(|key| linked_children.get(key))
-        else {
-            continue;
-        };
-        if collapsed_groups.contains(key.unwrap_or_default()) {
-            if let Some(active) = children
-                .iter()
-                .copied()
-                .find(|child| snapshot.workspaces[*child].focused)
-            {
-                entries.push(WorkspaceEntry {
-                    index: active,
-                    indented: true,
-                    last_child: true,
-                });
-            }
-            continue;
-        }
-        for (child_index, child) in children.iter().enumerate() {
-            entries.push(WorkspaceEntry {
-                index: *child,
-                indented: true,
-                last_child: child_index + 1 == children.len(),
-            });
-        }
-    }
-    entries
-}
-
-/// Resolves worktree groups: for each repo key that has both a primary
-/// (non-linked) checkout and at least one linked worktree, `parent_of` maps the
-/// key to its primary's index (the first in list order), and `linked_children`
-/// maps the key to its linked worktree indices in list order. Keys with only
-/// non-linked members (monorepo subprojects) produce no grouping.
-fn worktree_group_layout(
-    snapshot: &ClientShellSnapshot,
-) -> (HashMap<&str, usize>, HashMap<&str, Vec<usize>>) {
-    let mut linked_children = HashMap::<&str, Vec<usize>>::new();
-    for (index, workspace) in snapshot.workspaces.iter().enumerate() {
-        if let Some(worktree) = &workspace.worktree {
-            if worktree.is_linked_worktree {
-                linked_children
-                    .entry(&worktree.key)
-                    .or_default()
-                    .push(index);
-            }
-        }
-    }
-    let mut parent_of = HashMap::<&str, usize>::new();
-    for (index, workspace) in snapshot.workspaces.iter().enumerate() {
-        if let Some(worktree) = &workspace.worktree {
-            if !worktree.is_linked_worktree && linked_children.contains_key(worktree.key.as_str()) {
-                parent_of.entry(&worktree.key).or_insert(index);
-            }
-        }
-    }
-    // Drop linked-only keys with no primary so their worktrees render top-level.
-    linked_children.retain(|key, _| parent_of.contains_key(key));
-    (parent_of, linked_children)
-}
-
-fn parent_group_key(snapshot: &ClientShellSnapshot, index: usize) -> Option<String> {
-    let workspace = snapshot.workspaces.get(index)?;
-    let worktree = workspace.worktree.as_ref()?;
-    if worktree.is_linked_worktree {
-        return None;
-    }
-    // Only a primary with at least one linked worktree is a collapsible group.
-    // Non-linked workspaces sharing a repo (monorepo subprojects) are not.
-    snapshot
-        .workspaces
-        .iter()
-        .any(|candidate| {
-            candidate.worktree.as_ref().is_some_and(|candidate| {
-                candidate.is_linked_worktree && candidate.key == worktree.key
-            })
-        })
-        .then(|| worktree.key.clone())
-}
-
 fn displayed_workspace_status(
+    grouping: &WorkspaceGrouping,
     snapshot: &ClientShellSnapshot,
     workspace: &ClientShellWorkspace,
+    index: usize,
     collapsed_groups: &HashSet<String>,
 ) -> crate::api::schema::AgentStatus {
-    let Some(worktree) = workspace
-        .worktree
-        .as_ref()
-        .filter(|worktree| !worktree.is_linked_worktree)
-    else {
-        return workspace.agent_status;
-    };
-    if !collapsed_groups.contains(&worktree.key) {
+    if !collapsed_groups.contains(&workspace.workspace_id) {
         return workspace.agent_status;
     }
-    snapshot
-        .workspaces
+    let children = grouping.children(index);
+    if children.is_empty() {
+        return workspace.agent_status;
+    }
+    children
         .iter()
-        .filter(|candidate| {
-            candidate.worktree.as_ref().is_some_and(|candidate| {
-                candidate.is_linked_worktree && candidate.key == worktree.key
-            })
-        })
-        .map(|candidate| candidate.agent_status)
+        .map(|child| snapshot.workspaces[*child].agent_status)
         .chain(std::iter::once(workspace.agent_status))
         .max_by_key(|status| status_priority(*status))
         .unwrap_or(workspace.agent_status)

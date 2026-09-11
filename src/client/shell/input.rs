@@ -864,6 +864,9 @@ impl ClientShellState {
             }
             self.record_binding(binding, outcome);
         }
+        // An action dispatched from Navigate may deliberately open an overlay
+        // (the move-to-workspace picker); leaving Navigate is still correct
+        // because the overlay owns input while it is open.
         if !preserve_navigate {
             if self.mode == ClientShellMode::Navigate {
                 self.mode = self.copy_or_terminal_mode();

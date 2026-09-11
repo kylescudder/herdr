@@ -515,71 +515,36 @@ impl ClientShellState {
             .workspaces
             .iter()
             .find(|workspace| workspace.workspace_id == source_workspace_id)?;
-        if source
-            .worktree
-            .as_ref()
-            .is_some_and(|worktree| worktree.is_linked_worktree)
-        {
+        // Only top-level rows reorder, and they carry their whole group. The
+        // grouping must match the sidebar, which also nests by explicit parent.
+        let (source_root, block) =
+            super::render::workspace_group_block(snapshot, source_workspace_id)?;
+        if source_root != source_workspace_id {
             return None;
         }
         if before_workspace_id == Some(source_workspace_id) {
             return None;
         }
-        let roots = snapshot
-            .workspaces
-            .iter()
-            .filter(|workspace| {
-                !workspace
-                    .worktree
-                    .as_ref()
-                    .is_some_and(|worktree| worktree.is_linked_worktree)
-            })
-            .collect::<Vec<_>>();
-        let source_position = roots
-            .iter()
-            .position(|workspace| workspace.workspace_id == source_workspace_id)?;
+        let roots = super::render::top_level_workspace_ids(snapshot);
+        let source_position = roots.iter().position(|id| *id == source_workspace_id)?;
         let remaining = roots
             .iter()
-            .copied()
-            .filter(|workspace| workspace.workspace_id != source_workspace_id)
+            .filter(|id| *id != source_workspace_id)
             .collect::<Vec<_>>();
         let insert_position = match before_workspace_id {
-            Some(target) => remaining
-                .iter()
-                .position(|workspace| workspace.workspace_id == target)?,
+            Some(target) => remaining.iter().position(|id| *id == target)?,
             None => remaining.len(),
         };
         if insert_position == source_position {
             return None;
         }
 
-        // Move the whole worktree block only when the source primary actually
-        // has linked worktrees. Non-linked workspaces that merely share a repo
-        // (monorepo subprojects) move singly, matching the sidebar grouping.
-        let linked_children = source
-            .worktree
-            .as_ref()
-            .map(|worktree| {
-                snapshot
-                    .workspaces
-                    .iter()
-                    .filter(|workspace| workspace.workspace_id != source.workspace_id)
-                    .filter(|workspace| {
-                        workspace.worktree.as_ref().is_some_and(|candidate| {
-                            candidate.is_linked_worktree && candidate.key == worktree.key
-                        })
-                    })
-                    .map(|workspace| workspace.workspace_id.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !linked_children.is_empty() {
-            let workspace_ids = std::iter::once(source.workspace_id.clone())
-                .chain(linked_children)
-                .collect();
+        // A group (explicit children or linked worktrees) moves as one block.
+        // A lone top-level workspace moves singly.
+        if block.len() > 1 {
             Some(crate::api::schema::Method::WorkspaceMoveBlock(
                 crate::api::schema::WorkspaceMoveBlockParams {
-                    workspace_ids,
+                    workspace_ids: block,
                     before_workspace_id: before_workspace_id.map(str::to_owned),
                 },
             ))
@@ -1361,9 +1326,26 @@ impl ClientShellState {
                 ClientShellOverlay::WorktreeCreate(_)
                     | ClientShellOverlay::WorktreeOpen(_)
                     | ClientShellOverlay::WorktreeRemove(_)
+                    | ClientShellOverlay::MoveWorkspace(_)
             )
         ) {
             match mouse.kind {
+                MouseEventKind::ScrollUp
+                    if matches!(self.overlay, Some(ClientShellOverlay::MoveWorkspace(_))) =>
+                {
+                    if let Some(ClientShellOverlay::MoveWorkspace(picker)) = self.overlay.as_mut() {
+                        picker.move_selection(-1);
+                    }
+                    outcome.repaint = true;
+                }
+                MouseEventKind::ScrollDown
+                    if matches!(self.overlay, Some(ClientShellOverlay::MoveWorkspace(_))) =>
+                {
+                    if let Some(ClientShellOverlay::MoveWorkspace(picker)) = self.overlay.as_mut() {
+                        picker.move_selection(1);
+                    }
+                    outcome.repaint = true;
+                }
                 MouseEventKind::ScrollUp
                     if matches!(self.overlay, Some(ClientShellOverlay::WorktreeOpen(_))) =>
                 {
@@ -1388,6 +1370,8 @@ impl ClientShellState {
                                         ClientWorktreeOpenOverlay { opening: true, .. }
                                     ) | ClientShellOverlay::WorktreeRemove(
                                         ClientWorktreeRemoveOverlay { removing: true, .. }
+                                    ) | ClientShellOverlay::MoveWorkspace(
+                                        ClientMoveWorkspaceOverlay { moving: true, .. }
                                     )
                                 )
                             );
@@ -1408,11 +1392,17 @@ impl ClientShellState {
                         .find(|(rect, _)| super::contains(*rect, point))
                         .copied()
                     {
-                        if let Some(ClientShellOverlay::WorktreeOpen(open)) = self.overlay.as_mut()
-                        {
-                            open.selected = index;
+                        match self.overlay.as_mut() {
+                            Some(ClientShellOverlay::WorktreeOpen(open)) => {
+                                open.selected = index;
+                                self.submit_worktree_open(outcome);
+                            }
+                            Some(ClientShellOverlay::MoveWorkspace(picker)) => {
+                                picker.selected = index;
+                                self.submit_move_workspace(outcome);
+                            }
+                            _ => {}
                         }
-                        self.submit_worktree_open(outcome);
                     } else if super::contains(self.hits.overlay_primary, point) {
                         match self.overlay.as_ref() {
                             Some(ClientShellOverlay::WorktreeCreate(_)) => {
@@ -1423,6 +1413,9 @@ impl ClientShellState {
                             }
                             Some(ClientShellOverlay::WorktreeRemove(_)) => {
                                 self.submit_worktree_remove(outcome)
+                            }
+                            Some(ClientShellOverlay::MoveWorkspace(_)) => {
+                                self.submit_move_workspace(outcome)
                             }
                             _ => {}
                         }

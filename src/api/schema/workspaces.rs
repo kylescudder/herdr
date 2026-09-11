@@ -38,6 +38,15 @@ pub struct WorkspaceMoveParams {
     pub insert_index: usize,
 }
 
+/// Files `workspace_id` under `parent_workspace_id` (explicit worktree grouping),
+/// or clears the parent when it is `None`. Both reference `Workspace::id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceReparentParams {
+    pub workspace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_workspace_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceMoveBlockParams {
     pub workspace_ids: Vec<String>,
@@ -73,6 +82,11 @@ pub struct WorkspaceInfo {
     pub tokens: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorkspaceWorktreeInfo>,
+    /// The workspace this one is explicitly filed under, if any. Absent when it
+    /// sits at the top level, including when a linked worktree was explicitly
+    /// unfiled; grouping inferred from git is not reported here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

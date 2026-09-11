@@ -7,7 +7,13 @@ impl ClientContextMenuOverlay {
         let item = |label, action| ClientContextMenuItem { label, action };
         match &self.target {
             ClientContextMenuTarget::Workspace { is_git: false, .. } => {
-                vec![item("Rename", Action::Rename), item("Close", Action::Close)]
+                // Grouping is not git-derived, so a non-git workspace can be
+                // filed under another just like any other.
+                vec![
+                    item("Rename", Action::Rename),
+                    item("Close", Action::Close),
+                    item("Move to workspace...", Action::MoveToWorkspace),
+                ]
             }
             ClientContextMenuTarget::Workspace {
                 is_linked_worktree: false,
@@ -18,6 +24,7 @@ impl ClientContextMenuOverlay {
                 item("Close", Action::Close),
                 item("New worktree", Action::NewWorktree),
                 item("Open worktree...", Action::OpenWorktree),
+                item("Move to workspace...", Action::MoveToWorkspace),
             ],
             ClientContextMenuTarget::Workspace {
                 is_linked_worktree: true,
@@ -26,6 +33,7 @@ impl ClientContextMenuOverlay {
                 item("Rename", Action::Rename),
                 item("Close", Action::Close),
                 item("Delete worktree checkout...", Action::RemoveWorktree),
+                item("Move to workspace...", Action::MoveToWorkspace),
             ],
             ClientContextMenuTarget::Workspace {
                 has_worktree_children: true,
@@ -36,6 +44,7 @@ impl ClientContextMenuOverlay {
                 item("Close group", Action::Close),
                 item("New worktree", Action::NewWorktree),
                 item("Open worktree...", Action::OpenWorktree),
+                item("Move to workspace...", Action::MoveToWorkspace),
                 item(
                     if *collapsed { "Expand" } else { "Collapse" },
                     Action::ToggleGroup,
@@ -92,22 +101,11 @@ impl ClientShellState {
             return;
         };
         let worktree = workspace.worktree.as_ref();
-        let has_worktree_children = worktree.is_some_and(|worktree| {
-            !worktree.is_linked_worktree
-                && snapshot
-                    .workspaces
-                    .iter()
-                    .filter(|candidate| {
-                        candidate
-                            .worktree
-                            .as_ref()
-                            .is_some_and(|candidate| candidate.key == worktree.key)
-                    })
-                    .count()
-                    >= 2
-        });
-        let collapsed =
-            worktree.is_some_and(|worktree| self.collapsed_groups.contains(&worktree.key));
+        let group_key = super::render::group_collapse_key(snapshot, &workspace_id);
+        let has_worktree_children = group_key.is_some();
+        let collapsed = group_key
+            .as_ref()
+            .is_some_and(|key| self.collapsed_groups.contains(key));
         self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
             target: ClientContextMenuTarget::Workspace {
                 workspace_id,
@@ -269,14 +267,14 @@ impl ClientShellState {
             ClientContextMenuAction::RemoveWorktree => {
                 self.begin_worktree_action_for(KeybindAction::RemoveWorktree, workspace_id, outcome)
             }
+            ClientContextMenuAction::MoveToWorkspace => {
+                if self.open_move_workspace_overlay(workspace_id) {
+                    outcome.repaint = true;
+                }
+            }
             ClientContextMenuAction::ToggleGroup => {
                 let key = self.snapshot.as_deref().and_then(|snapshot| {
-                    snapshot
-                        .workspaces
-                        .iter()
-                        .find(|workspace| workspace.workspace_id == workspace_id)
-                        .and_then(|workspace| workspace.worktree.as_ref())
-                        .map(|worktree| worktree.key.clone())
+                    super::render::group_collapse_key(snapshot, &workspace_id)
                 });
                 if let Some(key) = key {
                     if !self.collapsed_groups.remove(&key) {

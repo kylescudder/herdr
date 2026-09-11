@@ -512,6 +512,12 @@
           "description": "Delete the selected managed worktree checkout after confirmation. Unset by default."
         },
         {
+          "key": "keys.move_worktree",
+          "type": "keybinding",
+          "default": "\"prefix+shift+m\"",
+          "description": "File the selected workspace under a chosen parent workspace (worktree grouping)."
+        },
+        {
           "key": "keys.rename_workspace",
           "type": "keybinding",
           "default": "\"prefix+shift+w\"",

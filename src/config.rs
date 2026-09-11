@@ -219,6 +219,40 @@ command = "lazygit"
     }
 
     #[test]
+    fn published_profile_keeps_the_move_worktree_binding() {
+        // The TUI takes its keybinds from the profile the server publishes.
+        // A default binding must survive that round trip even when the user
+        // overrides unrelated keys.
+        let config: Config = toml::from_str(
+            r#"
+onboarding = false
+
+[keys]
+move_workspace_previous = "prefix+shift+k"
+move_workspace_next = "prefix+shift+j"
+"#,
+        )
+        .unwrap();
+
+        let profile = config.local_keybindings_profile_toml().unwrap();
+        let keybinds = keybindings_from_profile_toml(&profile).unwrap();
+        let key = crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Char('M'),
+            crossterm::event::KeyModifiers::SHIFT,
+        );
+
+        assert!(
+            matches!(
+                crate::input::resolve_prefix_binding(&keybinds.keybinds, &key),
+                Some(crate::input::KeybindMatch::Action(
+                    crate::input::KeybindAction::MoveWorktreeToWorkspace
+                ))
+            ),
+            "endpoint profile must preserve prefix+shift+m; profile was:\n{profile}"
+        );
+    }
+
+    #[test]
     fn local_keybindings_profile_publishes_the_effective_prefix_fallback() {
         let config: Config = toml::from_str(
             r#"
