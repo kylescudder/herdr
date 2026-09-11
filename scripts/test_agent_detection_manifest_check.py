@@ -1,6 +1,8 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import agent_detection_manifest_check as check
 
@@ -43,15 +45,26 @@ def staged_grok_dirs(root: Path) -> tuple[Path, Path]:
 
 
 def unpublished_muse_dirs(root: Path) -> tuple[Path, Path]:
+    """A bundled-but-unpublished agent, staged independently of the real
+    registry so that publishing an agent does not break these tests."""
     bundled = root / "bundled"
     published = root / "published"
     bundled.mkdir()
     published.mkdir()
-    (bundled / "muse.toml").write_bytes(
-        (check.DEFAULT_BUNDLED_DIR / "muse.toml").read_bytes()
-    )
+    (bundled / "muse.toml").write_text(manifest("muse", "2026.08.26.1"))
     (published / "index.toml").write_text("schema_version = 1\nagents = []\n")
     return bundled, published
+
+
+def staged_exception(bundled: Path) -> dict[str, tuple[str, str]]:
+    """The exact version-and-digest exception for the staged agent above."""
+    path = bundled / "muse.toml"
+    return {
+        "muse": (
+            "2026.08.26.1",
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
+    }
 
 
 class AgentDetectionManifestCheckTests(unittest.TestCase):
@@ -138,20 +151,30 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
     def test_allows_exact_unpublished_bundled_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundled, published = unpublished_muse_dirs(Path(tmp))
-            bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
-            check.validate_catalog(
-                published,
-                bundled_manifests,
-                engine_version=3,
-                allow_unpublished=True,
-            )
+            bundled_manifests = check.load_manifest_dir(bundled, engine_version=1)
+            with mock.patch.dict(
+                check.UNPUBLISHED_BUNDLED_MANIFESTS,
+                staged_exception(bundled),
+                clear=True,
+            ):
+                check.validate_catalog(
+                    published,
+                    bundled_manifests,
+                    engine_version=1,
+                    allow_unpublished=True,
+                )
 
     def test_release_gate_rejects_exact_unpublished_bundled_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundled, published = unpublished_muse_dirs(Path(tmp))
-            bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
-            with self.assertRaisesRegex(check.CheckError, "missing bundled agent"):
-                check.validate_catalog(published, bundled_manifests, engine_version=3)
+            bundled_manifests = check.load_manifest_dir(bundled, engine_version=1)
+            with mock.patch.dict(
+                check.UNPUBLISHED_BUNDLED_MANIFESTS,
+                staged_exception(bundled),
+                clear=True,
+            ):
+                with self.assertRaisesRegex(check.CheckError, "missing bundled agent"):
+                    check.validate_catalog(published, bundled_manifests, engine_version=1)
 
     def test_rejects_mutated_unpublished_bundled_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:

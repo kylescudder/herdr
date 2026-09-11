@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## [0.9.1] - 2026-09-11
+
+### Added
+- File a workspace under another from a "move to workspace" picker: press `prefix+shift+m`, or use a workspace's right-click menu, then choose a target (or "top level"). The moved workspace and its own worktrees nest indented under the chosen parent, so related projects — for example several workspaces of one monorepo — can be grouped even when git cannot infer the relationship.
+- Workspace grouping is now readable over the JSON API: `workspace.reparent` files or unfiles a workspace, `parent_workspace_id` appears on workspace responses, and a `workspace.updated` event is emitted when it changes.
+
+### Fixed
+- Reordering with `shift+j`/`shift+k` now moves whichever top-level group a workspace belongs to, instead of silently doing nothing once a workspace was nested.
+- The sidebar, keyboard reorder and mouse drag now share one notion of grouping, so a group always moves as a single block.
+
 ## [0.9.0] - 2026-09-09
 
 ### Changed

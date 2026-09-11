@@ -211,7 +211,11 @@ jobs:
           test -f docs/next/README.zh-CN.md
 
   release:
-    needs: [build, flake-check, validate-release-inputs]
+    # flake-check intentionally excluded: this fork ships GitHub binaries and a
+    # Homebrew cask, not Nix, and `nix flake check` fetches crate tarballs that
+    # intermittently 403 — which silently skipped the release job and forced a
+    # manual publish. It still runs for signal.
+    needs: [build, validate-release-inputs]
     if: github.repository == 'kylescudder/herdr'
     runs-on: ubuntu-latest
     permissions:

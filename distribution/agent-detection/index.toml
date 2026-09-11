@@ -1,12 +1,12 @@
 schema_version = 1
 
 [[agents]]
-id = "amp"
-path = "amp.toml"
-
-[[agents]]
 id = "agy"
 path = "antigravity.toml"
+
+[[agents]]
+id = "amp"
+path = "amp.toml"
 
 [[agents]]
 id = "claude"
@@ -20,6 +20,9 @@ path = "cline.toml"
 id = "codex"
 path = "codex.toml"
 
+[[agents]]
+id = "copilot"
+path = "github-copilot.toml"
 [[agents]]
 id = "cursor"
 path = "cursor.toml"
@@ -61,6 +64,10 @@ id = "maki"
 path = "maki.toml"
 
 [[agents]]
+id = "muse"
+path = "muse.toml"
+
+[[agents]]
 id = "opencode"
 path = "opencode.toml"
 
@@ -76,6 +83,3 @@ path = "qodercli.toml"
 id = "qwen"
 path = "qwen.toml"
 
-[[agents]]
-id = "copilot"
-path = "github-copilot.toml"
