@@ -476,6 +476,12 @@ impl AppState {
                 continue;
             };
             let change = terminal.unchanged_effective_state_change_at(now);
+            // Drop any queued completion notification for this pane. With a
+            // non-zero `toast.delay_seconds` a background completion sits in
+            // `pending_agent_notifications` until its deadline, and the drain
+            // checks terminal state and agent label but not `seen` — so without
+            // this an acknowledged item still fires its toast and sound later.
+            self.pending_agent_notifications.remove(&pane_id);
             if let Some(pane) = self.workspaces[ws_idx]
                 .tabs
                 .iter_mut()
@@ -3038,6 +3044,56 @@ mod tests {
         // inbox item until the agent is addressed again.
         let pane = state.workspaces[0].panes.get(&pane_id).unwrap();
         assert!(!pane.seen);
+    }
+
+    /// Acknowledging must also cancel a queued completion notification. With a
+    /// non-zero `toast.delay_seconds` the toast sits in
+    /// `pending_agent_notifications` until its deadline, and the drain does not
+    /// check `seen`, so it would fire after the user dismissed the item.
+    #[test]
+    fn acknowledge_cancels_a_pending_completion_notification() {
+        let mut state = app_with_workspaces(&["active", "background"]);
+        state.active = Some(0);
+        state.toast_config.delay_seconds = 30;
+        let pane_id = *state.workspaces[1].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[1]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        state.terminals.get_mut(&terminal_id).unwrap().state = AgentState::Working;
+        state.workspaces[1].panes.get_mut(&pane_id).unwrap().seen = true;
+
+        // Background completion queues a delayed notification.
+        state.handle_app_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Pi),
+            state: AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+        assert!(
+            state.pending_agent_notifications.contains_key(&pane_id),
+            "a delayed completion notification should be queued"
+        );
+
+        state.acknowledge_workspace(1);
+
+        assert!(
+            !state.pending_agent_notifications.contains_key(&pane_id),
+            "acknowledging must cancel the queued notification"
+        );
+        // Nothing is delivered once the deadline passes.
+        let delivered = state.drain_due_agent_notifications(
+            std::time::Instant::now() + std::time::Duration::from_secs(120),
+        );
+        assert!(
+            delivered.is_empty(),
+            "an acknowledged completion must not notify later: {delivered:?}"
+        );
     }
 
     /// Restored with the sticky done markers (07d0a24e): focus must not clear a
