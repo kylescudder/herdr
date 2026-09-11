@@ -22,6 +22,7 @@ mod config;
 mod copy_mode;
 mod detect;
 mod events;
+mod fork_contract;
 mod ghostty;
 mod handoff_runtime;
 mod input;

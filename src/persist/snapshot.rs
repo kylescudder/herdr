@@ -478,6 +478,33 @@ pub(super) fn snapshot_file_version(content: &str) -> Option<u32> {
 }
 
 #[cfg(test)]
+mod fork_persistence_contract {
+    use super::WorkspaceSnapshot;
+
+    /// Fork hook: explicit workspace grouping must survive a restart. The field
+    /// is `#[serde(default, skip_serializing_if)]`, so dropping it during an
+    /// upstream merge silently loses every nested workspace. See FORK.md.
+    #[test]
+    fn parent_workspace_id_survives_the_snapshot_round_trip() {
+        let loaded: WorkspaceSnapshot = serde_json::from_str(
+            r#"{"identity_cwd":"/tmp/repo","tabs":[],"parent_workspace_id":"w9"}"#,
+        )
+        .expect("workspace snapshot deserializes");
+        assert_eq!(
+            loaded.parent_workspace_id.as_deref(),
+            Some("w9"),
+            "WorkspaceSnapshot must deserialize parent_workspace_id"
+        );
+
+        let json = serde_json::to_string(&loaded).expect("workspace snapshot serializes");
+        assert!(
+            json.contains("\"parent_workspace_id\":\"w9\""),
+            "WorkspaceSnapshot must serialize parent_workspace_id; json was {json}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
