@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## [0.9.2] - 2026-09-11
+
+### Added
+- Mark a finished session as read: `prefix+shift+a` acknowledges a workspace, sending its "done" agents back to idle without re-running them or closing anything. Also available as `herdr workspace acknowledge <workspace_id>` and the `workspace.acknowledge` API method.
+
+### Changed
+- A finished agent's "done" marker is now an inbox item rather than a notification. Focusing a pane, switching tab or workspace, and refocusing the terminal window no longer clear it; it clears when the agent is next addressed, or when you acknowledge the workspace.
+
+### Fixed
+- `shift+j` / `shift+k` on a workspace nested inside a group now reorders it among its siblings instead of moving the whole group, which left the selected row where it was.
+
 ## [0.9.1] - 2026-09-11
 
 ### Added
