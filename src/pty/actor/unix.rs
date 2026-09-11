@@ -1183,10 +1183,14 @@ mod tests {
             Bytes::from_static(b"\r"),
             Duration::ZERO,
         ) {
-            Ok(completion) => completion
-                .recv()
-                .expect("actor reports submission")
-                .expect_err("closed PTY rejects submission"),
+            Ok(completion) => match completion.recv() {
+                Ok(result) => result.expect_err("closed PTY rejects submission"),
+                // Racing the actor's shutdown: once the PTY is closed it may
+                // drop the completion channel before reporting. A dropped
+                // channel and a reported write error are both correct
+                // rejections, so accept either rather than flaking.
+                Err(_) => return,
+            },
             Err(err) => err,
         };
 

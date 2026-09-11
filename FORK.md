@@ -140,10 +140,12 @@ These tests fail in the Linux dev container for environmental reasons, not code:
 - `inactive_owner_cancels_idle_stream_and_dispatches_close` — concurrency timing
 - `unreadable_loose_ref_dir_is_unavailable_not_absent` — container runs as root,
   so `chmod 0o000` is bypassed
-- `pty::actor::unix::tests::actor_delays_enter_from_completed_prompt_write` —
-  intermittent under full-suite concurrency; passes in isolation
-
-Re-run a suspected flake on its own before believing it. All four pass on CI.
+Re-run a suspected flake on its own before believing it, but do not assume a
+flake is environmental: `actor_delays_enter_from_completed_prompt_write` looked
+like container noise and turned out to be a real race in the test, which also
+failed on CI. It asserted that a closed PTY always reports a write error, while
+the actor may instead drop the completion channel during shutdown. Fixed by
+accepting either outcome.
 
 Exclude with:
 
@@ -152,9 +154,6 @@ Exclude with:
     and not test(inactive_owner_cancels_idle_stream_and_dispatches_close)
     and not test(unreadable_loose_ref_dir_is_unavailable_not_absent)'
 ```
-
-`actor_delays_enter_from_completed_prompt_write` is left in, since it usually
-passes; re-run it alone if it trips.
 
 ```
 ```
