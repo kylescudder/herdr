@@ -264,6 +264,9 @@ pub enum Method {
     PluginPaneClose(PluginPaneCloseParams),
     #[serde(rename = "workspace.reparent")]
     WorkspaceReparent(WorkspaceReparentParams),
+    // Appended: generation-1 enum order is frozen, so new variants go last.
+    #[serde(rename = "workspace.acknowledge")]
+    WorkspaceAcknowledge(WorkspaceTarget),
 }
 
 #[cfg(test)]

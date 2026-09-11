@@ -96,7 +96,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | 通知 | `notification.show` |
 | 客户端 | `client.window_title.set`、`client.window_title.clear` |
 | 会话 | `session.snapshot` |
-| 工作区 | `workspace.create`、`workspace.list`、`workspace.get`、`workspace.focus`、`workspace.rename`、`workspace.move`、`workspace.move_block`、`workspace.report_metadata`、`workspace.close` |
+| 工作区 | `workspace.create`、`workspace.list`、`workspace.get`、`workspace.focus`、`workspace.rename`、`workspace.move`、`workspace.move_block`、`workspace.report_metadata`、`workspace.close`、`workspace.reparent`、`workspace.acknowledge` |
 | Worktree | `worktree.list`、`worktree.create`、`worktree.open`、`worktree.remove` |
 | 标签页 | `tab.create`、`tab.list`、`tab.get`、`tab.focus`、`tab.rename`、`tab.move`、`tab.close` |
 | 窗格 | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
@@ -110,6 +110,10 @@ herdr pane read w1:p2 --source recent --lines 50
 `agent.wait` 由服务器拥有并由事件驱动。它会固定到已解析的窗格占用者,因此替换后的智能体不能满足该等待。`agent.prompt` 接受可选的 `wait` 对象,其中包含 `until` 和 `timeout_ms`;这样可在一个请求中提交提示并开始等待,避免两个独立调用之间的竞态。如果解析出的智能体已经是 `blocked`,`agent.prompt` 不会发送输入或开始等待,而是返回 `agent_blocked`。
 
 `workspace.move_block` 会将有序的 `workspace_ids` 原子地移动到 `before_workspace_id` 之前;省略锚点则将该块移动到末尾。id 必须唯一,且锚点不能属于被移动的块。响应包含服务器确认的有序工作区列表。
+
+`workspace.reparent` 会把 `workspace_id` 归到 `parent_workspace_id` 下面,侧边栏会将其嵌套显示在该工作区之下;省略 `parent_workspace_id` 则把它移回顶层。把工作区归到它自己下面,或归到已经是它后代的工作区下面(包括通过推断出的 git 工作树父级),都会被拒绝。响应包含服务器确认的工作区列表,并发出 `workspace.updated`。
+
+`workspace.acknowledge` 会把 `workspace_id` 中的所有窗格标记为已读,让已完成的 “done” 代理回到 “idle”,既不会重新运行它,也不会关闭工作区。否则 done 标记会一直保留到该代理再次被使用为止,聚焦窗格或工作区并不会清除它。确认时还会取消这些窗格上待发送的完成通知。
 
 `session.snapshot` 为维护本地运行时缓存的客户端返回一次性引导快照。响应包含版本/协议元数据、当前聚焦的工作区/标签页/窗格 id、工作区记录、标签页记录、窗格记录、标签页布局快照和智能体记录。它不是订阅。为避免引导期间漏掉事件,应先在另一个连接上打开 `events.subscribe` 并等待确认,在调用 `session.snapshot` 时缓冲该事件流,然后安装快照、按顺序应用缓冲的事件并继续接收事件。重新连接后或本地缓存可能已过期时,再次调用 `session.snapshot`。工作区记录也包含关联 worktree 的来源信息。完整的仓库 worktree 发现仍使用 `worktree.list`。
 

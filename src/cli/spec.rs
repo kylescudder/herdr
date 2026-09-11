@@ -212,6 +212,11 @@ fn workspace_command() -> Command {
         )
         .subcommand(id_command("get", "workspace_id", "Show a workspace"))
         .subcommand(id_command("focus", "workspace_id", "Focus a workspace"))
+        .subcommand(id_command(
+            "acknowledge",
+            "workspace_id",
+            "Acknowledge a workspace, clearing its done markers",
+        ))
         .subcommand(
             Command::new("rename")
                 .about("Rename a workspace")

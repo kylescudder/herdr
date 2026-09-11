@@ -530,6 +530,12 @@
           "description": "Close the selected workspace."
         },
         {
+          "key": "keys.acknowledge",
+          "type": "keybinding",
+          "default": "\"prefix+shift+a\"",
+          "description": "Acknowledge the selected/active workspace, clearing its done markers so finished agents go back to idle without re-running them."
+        },
+        {
           "key": "keys.workspace_picker",
           "type": "keybinding",
           "default": "\"prefix+w\"",

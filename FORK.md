@@ -49,6 +49,8 @@ assert on is private:
 | `fork_contract::move_worktree_keybind_resolves_from_the_default_config` | `src/input/keybindings.rs` table + `src/config/{model,keybinds}.rs` |
 | `fork_contract::move_worktree_is_listed_in_keybind_help` | `src/input/keybind_help.rs` |
 | `fork_contract::parent_link_token_name_is_stable_and_namespaced` | `src/protocol/wire.rs` — `PARENT_WORKSPACE_TOKEN` |
+| `fork_contract::acknowledge_is_registered_for_the_ui_and_the_client_lane` | `request_changes_ui` + `CLIENT_SHELL_METHODS` for acknowledge |
+| `fork_contract::acknowledge_keybind_resolves_and_is_listed` | acknowledge keybind table, config fields, keybind help |
 | `persist::snapshot::fork_persistence_contract::parent_workspace_id_survives_the_snapshot_round_trip` | `src/persist/snapshot.rs` field + serde attrs |
 | `client::shell::tests::…::reorder_moves_an_explicit_parent_group_as_one_block` | one grouping source of truth across sidebar / reorder / drag |
 | `client::shell::tests::…::move_worktree_keybind_opens_the_move_workspace_picker` | keybind opens the modal, not a navigation mode |
@@ -116,6 +118,30 @@ Fork-owned modules (new files, so upstream merges cannot conflict with them):
 | `src/fork_contract.rs` | the hook guards |
 
 Everything else the feature needs is a hook listed above.
+
+### Sticky done markers + acknowledge
+
+A finished agent's "done" marker is an inbox item, not a notification: focusing
+a pane, switching tab or workspace, and refocusing the OS window do **not**
+clear it. A pane becomes seen only when its agent is addressed again, or when
+the workspace is explicitly acknowledged with `prefix+shift+a`
+(`workspace.acknowledge`, also `herdr workspace acknowledge <id>`).
+
+Originally `07d0a24e` (sticky markers) and `5219269b` (acknowledge). Both were
+reverted by the v0.9.0 sync, which reset `src/` to upstream — the commits stayed
+in history while their code did not, so `git log` showed the feature present
+when it was gone. Restored by porting the real diffs.
+
+Easy to get wrong when re-porting:
+
+- Four paths cleared markers on focus; `Workspace::switch_tab` had its own
+  seen-marking loop separate from the `mark_active_tab_seen` call sites.
+- A completion must set `seen = false` unconditionally. Upstream's version sets
+  it to `suppress_active_tab_notifications`, which silently restores the old
+  behaviour for a focused pane.
+- `acknowledge_workspace` builds `PaneStateUpdate` with
+  `suppress_completion: true` — it only flips `seen`, and must not fire a done
+  notification.
 
 ### Monorepo top-level spaces
 

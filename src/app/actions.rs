@@ -454,6 +454,65 @@ impl AppState {
             .is_some_and(|tab_idx| tab_idx == self.workspaces[ws_idx].active_tab)
     }
 
+    /// Marks every pane in `ws_idx` as seen ("acknowledged"), turning any
+    /// finished "done" agent back to "idle" without changing its agent state or
+    /// re-running it. Returns a `PaneStateUpdate` for each pane whose seen flag
+    /// actually flipped so the caller can emit `pane.agent_status_changed`.
+    pub(crate) fn acknowledge_workspace(&mut self, ws_idx: usize) -> Vec<PaneStateUpdate> {
+        let now = std::time::Instant::now();
+        let mut updates = Vec::new();
+        let Some(ws) = self.workspaces.get(ws_idx) else {
+            return updates;
+        };
+        let targets: Vec<(PaneId, crate::terminal::TerminalId)> = ws
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.panes.iter())
+            .filter(|(_, pane)| !pane.seen)
+            .map(|(pane_id, pane)| (*pane_id, pane.attached_terminal_id.clone()))
+            .collect();
+        for (pane_id, terminal_id) in targets {
+            let Some(terminal) = self.terminals.get(&terminal_id) else {
+                continue;
+            };
+            let change = terminal.unchanged_effective_state_change_at(now);
+            // Drop any queued completion notification for this pane. With a
+            // non-zero `toast.delay_seconds` a background completion sits in
+            // `pending_agent_notifications` until its deadline, and the drain
+            // checks terminal state and agent label but not `seen` — so without
+            // this an acknowledged item still fires its toast and sound later.
+            self.pending_agent_notifications.remove(&pane_id);
+            if let Some(pane) = self.workspaces[ws_idx]
+                .tabs
+                .iter_mut()
+                .find_map(|tab| tab.panes.get_mut(&pane_id))
+            {
+                pane.seen = true;
+            }
+            updates.push(PaneStateUpdate {
+                pane_id,
+                ws_idx,
+                previous_agent_label: change.previous_agent_label.clone(),
+                previous_known_agent: change.previous_known_agent,
+                previous_state: change.previous_state,
+                previous_seen: false,
+                previous_presentation: change.previous_presentation.clone(),
+                agent_label: change.agent_label.clone(),
+                known_agent: change.known_agent,
+                state: change.state,
+                seen: true,
+                presentation: change.presentation.clone(),
+                agent_name_changed: false,
+                agent_released: false,
+                agent_release_status: None,
+                // Acknowledging only flips `seen`; no completion occurred, so
+                // this must not fire a done notification.
+                suppress_completion: true,
+            });
+        }
+        updates
+    }
+
     pub fn switch_workspace(&mut self, idx: usize) {
         if idx < self.workspaces.len() {
             let previous_focus = self.current_pane_focus_target();
@@ -518,28 +577,6 @@ impl AppState {
             self.mark_session_dirty();
             self.record_pane_focus_after_navigation(previous_focus);
         }
-    }
-
-    pub(crate) fn mark_active_tab_seen(&mut self) -> bool {
-        let Some(ws_idx) = self.active else {
-            return false;
-        };
-        let Some(tab) = self
-            .workspaces
-            .get_mut(ws_idx)
-            .and_then(crate::workspace::Workspace::active_tab_mut)
-        else {
-            return false;
-        };
-
-        let mut changed = false;
-        for pane in tab.panes.values_mut() {
-            if !pane.seen {
-                pane.seen = true;
-                changed = true;
-            }
-        }
-        changed
     }
 
     pub fn move_workspace(&mut self, source_idx: usize, insert_idx: usize) -> bool {
@@ -1979,18 +2016,20 @@ impl AppState {
         change: &EffectiveStateChange,
         suppress_completion: bool,
     ) -> Option<bool> {
-        let is_active_tab = self.pane_is_in_active_tab(ws_idx, pane_id);
-        let suppress_active_tab_notifications =
-            active_tab_suppresses_notifications(is_active_tab, self.outer_terminal_focus);
         let pane = self.workspaces[ws_idx]
             .tabs
             .iter_mut()
             .find_map(|tab| tab.panes.get_mut(&pane_id))?;
 
+        // Inbox semantics: a pane is "seen" only once its agent is next
+        // addressed (i.e. starts working again). Every completion becomes an
+        // unseen item until then, regardless of whether the pane was focused
+        // when it finished. Focusing a pane no longer clears its done marker;
+        // that is handled by the removal of `mark_active_tab_seen` on focus.
         if change.state != AgentState::Idle {
             pane.seen = true;
         } else if !suppress_completion && is_completion_transition(change) {
-            pane.seen = suppress_active_tab_notifications;
+            pane.seen = false;
         }
         let seen = pane.seen;
 
@@ -2675,14 +2714,16 @@ mod tests {
     }
 
     #[test]
-    fn switch_workspace_marks_panes_seen() {
+    fn switch_workspace_preserves_done_marker() {
         let mut state = app_with_workspaces(&["a", "b"]);
-        // Mark a pane in workspace 1 as unseen
+        // A pane in workspace 1 has an unaddressed done marker.
         let id = *state.workspaces[1].panes.keys().next().unwrap();
         state.workspaces[1].panes.get_mut(&id).unwrap().seen = false;
 
+        // Focusing/switching to the workspace must not clear it; it is an inbox
+        // item until the agent is addressed.
         state.switch_workspace(1);
-        assert!(state.workspaces[1].panes.get(&id).unwrap().seen);
+        assert!(!state.workspaces[1].panes.get(&id).unwrap().seen);
     }
 
     #[test]
@@ -2973,7 +3014,7 @@ mod tests {
     }
 
     #[test]
-    fn active_tab_completion_marks_pane_seen() {
+    fn active_tab_completion_marks_pane_unseen() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
         state.outer_terminal_focus = Some(true);
@@ -2985,7 +3026,7 @@ mod tests {
             .attached_terminal_id
             .clone();
         state.terminals.get_mut(&terminal_id).unwrap().state = AgentState::Working;
-        state.workspaces[0].panes.get_mut(&pane_id).unwrap().seen = false;
+        state.workspaces[0].panes.get_mut(&pane_id).unwrap().seen = true;
 
         state.handle_app_event(AppEvent::StateChanged {
             pane_id,
@@ -2999,8 +3040,105 @@ mod tests {
 
         let terminal = state.terminals.get(&terminal_id).unwrap();
         assert_eq!(terminal.state, AgentState::Idle);
+        // Even though the pane is the focused active tab, a completion is an
+        // inbox item until the agent is addressed again.
         let pane = state.workspaces[0].panes.get(&pane_id).unwrap();
-        assert!(pane.seen);
+        assert!(!pane.seen);
+    }
+
+    /// Acknowledging must also cancel a queued completion notification. With a
+    /// non-zero `toast.delay_seconds` the toast sits in
+    /// `pending_agent_notifications` until its deadline, and the drain does not
+    /// check `seen`, so it would fire after the user dismissed the item.
+    #[test]
+    fn acknowledge_cancels_a_pending_completion_notification() {
+        let mut state = app_with_workspaces(&["active", "background"]);
+        state.active = Some(0);
+        state.toast_config.delay_seconds = 30;
+        let pane_id = *state.workspaces[1].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[1]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        state.terminals.get_mut(&terminal_id).unwrap().state = AgentState::Working;
+        state.workspaces[1].panes.get_mut(&pane_id).unwrap().seen = true;
+
+        // Background completion queues a delayed notification.
+        state.handle_app_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Pi),
+            state: AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+        assert!(
+            state.pending_agent_notifications.contains_key(&pane_id),
+            "a delayed completion notification should be queued"
+        );
+
+        state.acknowledge_workspace(1);
+
+        assert!(
+            !state.pending_agent_notifications.contains_key(&pane_id),
+            "acknowledging must cancel the queued notification"
+        );
+        // Nothing is delivered once the deadline passes.
+        let delivered = state.drain_due_agent_notifications(
+            std::time::Instant::now() + std::time::Duration::from_secs(120),
+        );
+        assert!(
+            delivered.is_empty(),
+            "an acknowledged completion must not notify later: {delivered:?}"
+        );
+    }
+
+    /// Restored with the sticky done markers (07d0a24e): focus must not clear a
+    /// completion; only the agent being addressed again does.
+    #[test]
+    fn done_marker_survives_focus_until_agent_is_addressed() {
+        let mut state = app_with_workspaces(&["active", "background"]);
+        state.active = Some(0);
+        let pane_id = *state.workspaces[1].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[1]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        state.terminals.get_mut(&terminal_id).unwrap().state = AgentState::Working;
+        state.workspaces[1].panes.get_mut(&pane_id).unwrap().seen = true;
+
+        // Agent finishes in the background -> done marker (unseen).
+        state.handle_app_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Pi),
+            state: AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+        assert!(!state.workspaces[1].panes.get(&pane_id).unwrap().seen);
+
+        // Focusing/switching to the pane must not clear the marker.
+        state.switch_workspace(1);
+        assert!(!state.workspaces[1].panes.get(&pane_id).unwrap().seen);
+
+        // Addressing the agent (it starts working again) clears it.
+        state.handle_app_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Pi),
+            state: AgentState::Working,
+            visible_blocker: false,
+            visible_working: true,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+        assert!(state.workspaces[1].panes.get(&pane_id).unwrap().seen);
     }
 
     #[test]

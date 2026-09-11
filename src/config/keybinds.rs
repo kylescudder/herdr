@@ -327,6 +327,7 @@ pub struct Keybinds {
     pub move_worktree: ActionKeybinds,
     pub rename_workspace: ActionKeybinds,
     pub close_workspace: ActionKeybinds,
+    pub acknowledge: ActionKeybinds,
     pub workspace_picker: ActionKeybinds,
     pub goto: ActionKeybinds,
     pub detach: ActionKeybinds,
@@ -498,6 +499,7 @@ impl Config {
             move_worktree: empty_action!(),
             rename_workspace: empty_action!(),
             close_workspace: empty_action!(),
+            acknowledge: empty_action!(),
             workspace_picker: empty_action!(),
             goto: empty_action!(),
             detach: empty_action!(),
@@ -629,6 +631,7 @@ impl Config {
             apply_action!(keybinds.move_worktree, move_worktree, source);
             apply_action!(keybinds.rename_workspace, rename_workspace, source);
             apply_action!(keybinds.close_workspace, close_workspace, source);
+            apply_action!(keybinds.acknowledge, acknowledge, source);
             apply_action!(keybinds.workspace_picker, workspace_picker, source);
             apply_action!(keybinds.goto, goto, source);
             apply_action!(keybinds.detach, detach, source);
