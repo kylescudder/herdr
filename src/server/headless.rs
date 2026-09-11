@@ -854,9 +854,6 @@ impl HeadlessServer {
         let server_keybindings = self.server_keybindings.clone();
         apply_keybindings(&mut self.app, &server_keybindings);
         self.sync_visible_server_config_diagnostic(false);
-        if outer_terminal_focus == Some(true) {
-            self.app.state.mark_active_tab_seen();
-        }
         self.app.set_host_terminal_appearance_state(
             host_terminal_appearance,
             host_terminal_appearance_explicit,
