@@ -57,6 +57,30 @@ assert on is private:
 | `server::client_shell::tests::snapshot_carries_the_explicit_parent_link_as_a_public_workspace_id` | projection emits the public id the client matches |
 | `config::tests::published_profile_keeps_the_move_worktree_binding` | binding survives the endpoint keybind profile round trip |
 
+### Hooks with no test guard
+
+`docs/versions/manifest.json` pins each published version to the commit its docs
+were seeded from. Upstream ships its own manifest, so **every upstream merge
+re-points these at upstream's release commits** and `node scripts/docs/versions.mjs
+check` fails with "tag vX moved from A to B". Repoint the affected entries at the
+fork's own tags (`git rev-parse vX^{commit}`); `215fe66f` did this for 0.8.0 and
+the next merge clobbered 0.8.2 the same way.
+
+Translated docs (`docs/next/website/src/content/docs/{ja,zh-cn}/`) must keep the
+same **heading outline** as the English page. Adding an `##` section without
+translating it fails `scripts/docs_translation_parity.py`.
+
+Neither is caught by `cargo nextest`. Run the validate job's commands before
+pushing:
+
+```bash
+python3 scripts/agent_detection_manifest_check.py --require-published
+python3 scripts/config_reference_check.py
+python3 scripts/docs_translation_parity.py --docs-root docs/next/website/src/content/docs
+node scripts/docs/versions.mjs check
+node scripts/docs/preview.mjs check
+```
+
 Every guard above has been verified to **fail** when its hook is removed. If you
 add a fork feature, add a guard for each hook it needs and verify the same way:
 delete the hook, watch the named test go red, restore it.
