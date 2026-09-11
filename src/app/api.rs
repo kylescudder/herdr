@@ -622,6 +622,18 @@ impl App {
         });
     }
 
+    /// Acknowledges every pane in a workspace (marks them seen), turning any
+    /// "done" agent back to "idle" without re-running it, and emits the
+    /// resulting `pane.agent_status_changed` events so all clients update live.
+    /// Returns how many panes were acknowledged.
+    pub(crate) fn acknowledge_workspace_seen(&mut self, ws_idx: usize) -> usize {
+        let updates = self.state.acknowledge_workspace(ws_idx);
+        for update in &updates {
+            self.emit_pane_state_update(update);
+        }
+        updates.len()
+    }
+
     pub(crate) fn emit_pane_state_update(&mut self, update: &crate::app::actions::PaneStateUpdate) {
         let Some(pane_id) = self.public_pane_id(update.ws_idx, update.pane_id) else {
             return;
@@ -1013,6 +1025,9 @@ impl App {
             }
             Method::WorkspaceClose(target) => {
                 return self.handle_workspace_close(request.id, target)
+            }
+            Method::WorkspaceAcknowledge(target) => {
+                return self.handle_workspace_acknowledge(request.id, target)
             }
             Method::WorktreeList(params) => return self.handle_worktree_list(request.id, params),
             Method::WorktreeCreate(params) => {

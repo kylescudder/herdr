@@ -132,6 +132,80 @@ mod tests {
         );
     }
 
+    /// Hooks: `src/api/mod.rs` (`request_changes_ui`) and
+    /// `src/server/client_commands.rs` (`CLIENT_SHELL_METHODS`) for the
+    /// acknowledge action.
+    ///
+    /// Acknowledging changes sidebar-visible status, so without the first the
+    /// server never re-renders and a "done" workspace keeps its marker; without
+    /// the second the TUI's keybind is rejected outright.
+    #[test]
+    fn acknowledge_is_registered_for_the_ui_and_the_client_lane() {
+        let request = crate::api::schema::Request {
+            id: "guard".into(),
+            method: crate::api::schema::Method::WorkspaceAcknowledge(
+                crate::api::schema::WorkspaceTarget {
+                    workspace_id: "w1".into(),
+                },
+            ),
+        };
+        assert!(
+            crate::api::request_changes_ui(&request),
+            "workspace.acknowledge must be listed in request_changes_ui \
+             (src/api/mod.rs), or acknowledging never re-renders the sidebar"
+        );
+        assert!(
+            crate::server::client_commands::supports_client_shell_method_name(
+                "workspace.acknowledge"
+            ),
+            "workspace.acknowledge must be in CLIENT_SHELL_METHODS \
+             (src/server/client_commands.rs), or the TUI cannot invoke it"
+        );
+    }
+
+    /// Hooks: the `resolve_non_indexed_action` table plus the `acknowledge`
+    /// field in `src/config/{model,keybinds}.rs`, and `keybind_help.rs`.
+    #[test]
+    fn acknowledge_keybind_resolves_and_is_listed() {
+        let config = crate::config::Config::default();
+        let (live, _diagnostics) = config
+            .live_keybinds_with_diagnostics()
+            .expect("default keybinds must be valid");
+
+        for key in [
+            crate::input::TerminalKey::new(
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::SHIFT,
+            ),
+            crate::input::TerminalKey::new(
+                crossterm::event::KeyCode::Char('A'),
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        ] {
+            assert!(
+                matches!(
+                    crate::input::resolve_prefix_binding(&live.keybinds, &key),
+                    Some(crate::input::KeybindMatch::Action(
+                        crate::input::KeybindAction::AcknowledgeWorkspace
+                    ))
+                ),
+                "prefix+shift+a must resolve to AcknowledgeWorkspace for {key:?}; \
+                 check the resolve_non_indexed_action table and the acknowledge \
+                 field in src/config/model.rs + keybinds.rs"
+            );
+        }
+
+        let groups = crate::input::keybind_help_groups(&live.keybinds, live.prefix);
+        assert!(
+            groups
+                .iter()
+                .flat_map(|(_, entries)| entries.iter())
+                .any(|(binding, label)| label.contains("acknowledge") && binding != "unset"),
+            "the acknowledge binding must appear in keybind help \
+             (src/input/keybind_help.rs)"
+        );
+    }
+
     // The persistence hook (`WorkspaceSnapshot.parent_workspace_id`) is guarded
     // by `parent_workspace_id_survives_the_snapshot_round_trip` in
     // src/persist/snapshot.rs, which can reach that private module.

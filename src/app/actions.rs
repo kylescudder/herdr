@@ -454,6 +454,59 @@ impl AppState {
             .is_some_and(|tab_idx| tab_idx == self.workspaces[ws_idx].active_tab)
     }
 
+    /// Marks every pane in `ws_idx` as seen ("acknowledged"), turning any
+    /// finished "done" agent back to "idle" without changing its agent state or
+    /// re-running it. Returns a `PaneStateUpdate` for each pane whose seen flag
+    /// actually flipped so the caller can emit `pane.agent_status_changed`.
+    pub(crate) fn acknowledge_workspace(&mut self, ws_idx: usize) -> Vec<PaneStateUpdate> {
+        let now = std::time::Instant::now();
+        let mut updates = Vec::new();
+        let Some(ws) = self.workspaces.get(ws_idx) else {
+            return updates;
+        };
+        let targets: Vec<(PaneId, crate::terminal::TerminalId)> = ws
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.panes.iter())
+            .filter(|(_, pane)| !pane.seen)
+            .map(|(pane_id, pane)| (*pane_id, pane.attached_terminal_id.clone()))
+            .collect();
+        for (pane_id, terminal_id) in targets {
+            let Some(terminal) = self.terminals.get(&terminal_id) else {
+                continue;
+            };
+            let change = terminal.unchanged_effective_state_change_at(now);
+            if let Some(pane) = self.workspaces[ws_idx]
+                .tabs
+                .iter_mut()
+                .find_map(|tab| tab.panes.get_mut(&pane_id))
+            {
+                pane.seen = true;
+            }
+            updates.push(PaneStateUpdate {
+                pane_id,
+                ws_idx,
+                previous_agent_label: change.previous_agent_label.clone(),
+                previous_known_agent: change.previous_known_agent,
+                previous_state: change.previous_state,
+                previous_seen: false,
+                previous_presentation: change.previous_presentation.clone(),
+                agent_label: change.agent_label.clone(),
+                known_agent: change.known_agent,
+                state: change.state,
+                seen: true,
+                presentation: change.presentation.clone(),
+                agent_name_changed: false,
+                agent_released: false,
+                agent_release_status: None,
+                // Acknowledging only flips `seen`; no completion occurred, so
+                // this must not fire a done notification.
+                suppress_completion: true,
+            });
+        }
+        updates
+    }
+
     pub fn switch_workspace(&mut self, idx: usize) {
         if idx < self.workspaces.len() {
             let previous_focus = self.current_pane_focus_target();

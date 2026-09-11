@@ -136,6 +136,26 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if action == crate::input::KeybindAction::AcknowledgeWorkspace {
+                    // Mark a finished workspace as read: its "done" agents go
+                    // back to idle without re-running them. Acts on the picker
+                    // selection when open, else the focused workspace.
+                    let target = self.navigate_workspace_id.clone().or_else(|| {
+                        self.snapshot
+                            .as_deref()
+                            .and_then(|snapshot| snapshot.focused_workspace_id.clone())
+                    });
+                    if let Some(workspace_id) = target {
+                        self.push_endpoint_method(
+                            crate::api::schema::Method::WorkspaceAcknowledge(
+                                crate::api::schema::WorkspaceTarget { workspace_id },
+                            ),
+                            outcome,
+                        );
+                        outcome.repaint = true;
+                    }
+                    return;
+                }
                 if action == crate::input::KeybindAction::MoveWorktreeToWorkspace {
                     // Opens the modal "move to workspace" picker, matching the
                     // original feature. Prefer the workspace selected in the
