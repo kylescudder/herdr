@@ -213,8 +213,8 @@ fn move_workspace_keybind_at_top_is_noop() {
 #[test]
 fn reorder_moves_an_explicit_parent_group_as_one_block() {
     // Reorder must use the sidebar's grouping. A workspace with an explicitly
-    // filed child moves as a block, and the child is not independently
-    // reorderable, or shift+j/k silently does nothing once anything is nested.
+    // filed child moves as a block. Sibling-level reordering is covered by
+    // reorder_moves_a_nested_workspace_within_its_group.
     let config = ClientShellConfig::from_config(&Config::default());
     let mut state = ClientShellState::new(config);
     let mut snapshot = snapshot();
@@ -247,18 +247,13 @@ fn reorder_moves_an_explicit_parent_group_as_one_block() {
         "parent must move with its child: {method:?}"
     );
 
-    // The nested child resolves to its parent rather than moving alone.
-    let from_child = state
-        .workspace_reorder_method("ws_3", false)
-        .expect("child should reorder its parent group");
+    // A nested child reorders among its siblings, not by moving the group.
+    // It is the only child here, so there is nowhere to go.
     assert!(
-        matches!(
-            &from_child,
-            crate::api::schema::Method::WorkspaceMoveBlock(params)
-                if params.workspace_ids == vec!["ws_1".to_owned(), "ws_3".to_owned()]
-        ),
-        "child must move its parent's block: {from_child:?}"
+        state.workspace_reorder_method("ws_3", false).is_none(),
+        "a lone child has no sibling to swap with"
     );
+    assert!(state.workspace_reorder_method("ws_3", true).is_none());
 
     // An ungrouped top-level workspace still moves on its own.
     let lone = state
@@ -658,5 +653,75 @@ fn move_workspace_picker_files_a_clicked_target() {
         ),
         "got {:?}",
         request.method
+    );
+}
+
+#[test]
+fn reorder_moves_a_nested_workspace_within_its_group() {
+    // A worktree selected inside a group reorders among its siblings. Moving
+    // the parent block instead would leave the selected row where it was,
+    // which reads as the keybind doing nothing.
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "bifrost".into();
+    for (index, label) in [(2, "first"), (3, "second"), (4, "third")] {
+        let mut child = snapshot.workspaces[0].clone();
+        child.workspace_id = format!("ws_{index}");
+        child.number = index;
+        child.label = label.into();
+        child.focused = false;
+        child.tokens.push((
+            crate::protocol::PARENT_WORKSPACE_TOKEN.into(),
+            "ws_1".into(),
+        ));
+        snapshot.workspaces.push(child);
+    }
+    // A second top-level row, so the group head has somewhere to move.
+    let mut other = snapshot.workspaces[0].clone();
+    other.workspace_id = "ws_5".into();
+    other.number = 5;
+    other.label = "sabt".into();
+    other.focused = false;
+    snapshot.workspaces.push(other);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    // ws_3 ("second") sits at global index 2, between ws_2 and ws_4.
+    let up = state
+        .workspace_reorder_method("ws_3", true)
+        .expect("a nested workspace should reorder");
+    assert!(
+        matches!(
+            &up,
+            crate::api::schema::Method::WorkspaceMove(params)
+                if params.workspace_id == "ws_3" && params.insert_index == 1
+        ),
+        "moving up must swap with the sibling above, not move the group: {up:?}"
+    );
+
+    let down = state
+        .workspace_reorder_method("ws_3", false)
+        .expect("a nested workspace should reorder");
+    assert!(
+        matches!(
+            &down,
+            crate::api::schema::Method::WorkspaceMove(params)
+                if params.workspace_id == "ws_3" && params.insert_index == 4
+        ),
+        "moving down must swap with the sibling below: {down:?}"
+    );
+
+    // Ends of the group are no-ops rather than escaping it.
+    assert!(state.workspace_reorder_method("ws_2", true).is_none());
+    assert!(state.workspace_reorder_method("ws_4", false).is_none());
+
+    // The parent still moves its whole block.
+    let parent = state
+        .workspace_reorder_method("ws_1", false)
+        .expect("the group head should still reorder");
+    assert!(
+        matches!(&parent, crate::api::schema::Method::WorkspaceMoveBlock(_)),
+        "a top-level row still moves as a block: {parent:?}"
     );
 }

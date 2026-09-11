@@ -37,6 +37,11 @@ impl WorkspaceGrouping {
         }
     }
 
+    /// The top-level row `index` nests under, or `None` when it is itself one.
+    pub(crate) fn parent_of(&self, index: usize) -> Option<usize> {
+        self.parent_index.get(index).copied().flatten()
+    }
+
     pub(crate) fn children(&self, index: usize) -> &[usize] {
         self.children_of
             .get(&index)

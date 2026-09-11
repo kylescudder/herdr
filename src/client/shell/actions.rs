@@ -912,9 +912,36 @@ impl ClientShellState {
         up: bool,
     ) -> Option<crate::api::schema::Method> {
         let snapshot = self.snapshot.as_deref()?;
+        let grouping = super::workspace_grouping::WorkspaceGrouping::compute(snapshot);
+        let index = snapshot
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.workspace_id == source_workspace_id)?;
+
+        // A nested workspace reorders among its siblings, inside the group.
+        // Moving its parent's block instead would leave the selected row
+        // exactly where it was, which reads as the keybind doing nothing.
+        if let Some(root) = grouping.parent_of(index) {
+            let siblings = grouping.children(root);
+            let position = siblings.iter().position(|sibling| *sibling == index)?;
+            // `move_workspace` inserts before the element currently at
+            // `insert_index`, so swapping with the neighbour above is that
+            // neighbour's index, and with the one below is just past it.
+            let insert_index = if up {
+                *siblings.get(position.checked_sub(1)?)?
+            } else {
+                siblings.get(position + 1)?.saturating_add(1)
+            };
+            return Some(crate::api::schema::Method::WorkspaceMove(
+                crate::api::schema::WorkspaceMoveParams {
+                    workspace_id: source_workspace_id.to_owned(),
+                    insert_index,
+                },
+            ));
+        }
+
         // Reorder the top-level row this workspace belongs to, using the same
-        // grouping the sidebar renders. A workspace filed under another (or a
-        // linked worktree) moves its parent's block, not itself.
+        // grouping the sidebar renders.
         let (source_root, _) = super::render::workspace_group_block(snapshot, source_workspace_id)?;
         let roots = super::render::top_level_workspace_ids(snapshot);
         let position = roots.iter().position(|id| *id == source_root)?;
