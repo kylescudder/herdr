@@ -1032,6 +1032,12 @@ pub struct ClientShellWorktree {
     pub is_linked_worktree: bool,
 }
 
+/// Name of the `ClientShellWorkspace.tokens` entry carrying a workspace's
+/// explicit parent workspace id. It is not a rendered token template, so it
+/// stays invisible in the UI; only sidebar grouping reads it. Using an existing
+/// value-level field keeps the frozen generation-1 snapshot codec unchanged.
+pub const PARENT_WORKSPACE_TOKEN: &str = "herdr:parent";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientShellTab {
     pub tab_id: String,

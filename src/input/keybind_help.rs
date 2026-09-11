@@ -123,6 +123,10 @@ pub(crate) fn keybind_help_groups(
                     "delete worktree checkout",
                 ),
                 entry(
+                    binding_label(&keybinds.move_worktree),
+                    "move worktree to workspace",
+                ),
+                entry(
                     binding_label(&keybinds.rename_workspace),
                     "rename workspace",
                 ),

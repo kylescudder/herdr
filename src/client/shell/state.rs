@@ -321,6 +321,7 @@ pub(super) enum ClientShellOverlayKind {
     WorktreeCreate,
     WorktreeOpen,
     WorktreeRemove,
+    MoveWorkspace,
     ContextMenu,
     GlobalMenu,
     Settings,
@@ -533,6 +534,44 @@ pub(super) struct ClientWorktreeRemoveOverlay {
     pub(super) force_confirmation: bool,
 }
 
+/// A candidate destination in the "move to workspace" picker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClientMoveWorkspaceTarget {
+    /// Target workspace public id, or `None` for "top level" (unfile).
+    pub(super) target_id: Option<String>,
+    pub(super) label: String,
+}
+
+/// Picker for filing one workspace under another. The original feature drew a
+/// modal list rather than reusing sidebar navigation, so keep it an overlay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClientMoveWorkspaceOverlay {
+    /// Public id of the workspace being moved.
+    pub(super) workspace_id: String,
+    pub(super) label: String,
+    pub(super) entries: Vec<ClientMoveWorkspaceTarget>,
+    pub(super) selected: usize,
+    pub(super) error: Option<String>,
+    pub(super) moving: bool,
+}
+
+impl ClientMoveWorkspaceOverlay {
+    pub(super) fn selected_target_id(&self) -> Option<String> {
+        self.entries
+            .get(self.selected)
+            .and_then(|target| target.target_id.clone())
+    }
+
+    pub(super) fn move_selection(&mut self, delta: isize) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let last = self.entries.len() - 1;
+        let next = self.selected as isize + delta;
+        self.selected = next.clamp(0, last as isize) as usize;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClientContextMenuAction {
     Rename,
@@ -540,6 +579,7 @@ pub(super) enum ClientContextMenuAction {
     NewWorktree,
     OpenWorktree,
     RemoveWorktree,
+    MoveToWorkspace,
     ToggleGroup,
     NewTab,
     RenamePane,
@@ -606,6 +646,7 @@ pub(super) enum ClientShellOverlay {
     WorktreeCreate(ClientWorktreeCreateOverlay),
     WorktreeOpen(ClientWorktreeOpenOverlay),
     WorktreeRemove(ClientWorktreeRemoveOverlay),
+    MoveWorkspace(ClientMoveWorkspaceOverlay),
     ContextMenu(ClientContextMenuOverlay),
     GlobalMenu(ClientGlobalMenuOverlay),
     Settings(ClientSettingsOverlay),
@@ -624,6 +665,7 @@ impl ClientShellOverlay {
             Self::WorktreeCreate(_) => ClientShellOverlayKind::WorktreeCreate,
             Self::WorktreeOpen(_) => ClientShellOverlayKind::WorktreeOpen,
             Self::WorktreeRemove(_) => ClientShellOverlayKind::WorktreeRemove,
+            Self::MoveWorkspace(_) => ClientShellOverlayKind::MoveWorkspace,
             Self::ContextMenu(_) => ClientShellOverlayKind::ContextMenu,
             Self::GlobalMenu(_) => ClientShellOverlayKind::GlobalMenu,
             Self::Settings(_) => ClientShellOverlayKind::Settings,
@@ -657,6 +699,7 @@ pub(super) enum PendingEndpointKind {
     WorktreeRemove {
         forced: bool,
     },
+    MoveWorkspace,
     SelectionCopy {
         fallback: Option<ClientMessage>,
     },

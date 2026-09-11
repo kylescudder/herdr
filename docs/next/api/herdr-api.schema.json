@@ -4520,6 +4520,24 @@
           ],
           "type": "object"
         },
+        "WorkspaceReparentParams": {
+          "description": "Files `workspace_id` under `parent_workspace_id` (explicit worktree grouping),\nor clears the parent when it is `None`. Both reference `Workspace::id`.",
+          "properties": {
+            "parent_workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id"
+          ],
+          "type": "object"
+        },
         "WorkspaceReportMetadataParams": {
           "properties": {
             "seq": {
@@ -6343,6 +6361,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PluginPaneCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "workspace.reparent",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/WorkspaceReparentParams"
             }
           },
           "required": [

@@ -343,6 +343,8 @@ pub struct KeysConfig {
     pub open_worktree: BindingConfig,
     /// Delete the selected managed worktree checkout after confirmation. Unset by default.
     pub remove_worktree: BindingConfig,
+    /// Move the selected worktree under a chosen workspace. Default: "prefix+shift+m".
+    pub move_worktree: BindingConfig,
     /// Rename the selected workspace. Default: "prefix+shift+w"
     pub rename_workspace: BindingConfig,
     /// Close the selected workspace. Default: "prefix+shift+d"
@@ -478,6 +480,7 @@ pub(crate) struct KeysConfigOverlay {
     open_worktree: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     remove_worktree: Option<BindingConfig>,
+    move_worktree: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rename_workspace: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -620,6 +623,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(new_worktree);
         apply_field!(open_worktree);
         apply_field!(remove_worktree);
+        apply_field!(move_worktree);
         apply_field!(rename_workspace);
         apply_field!(close_workspace);
         apply_field!(workspace_picker);
@@ -726,6 +730,7 @@ impl KeysConfig {
         copy_effective_action_field!(new_worktree, keybinds.new_worktree);
         copy_effective_action_field!(open_worktree, keybinds.open_worktree);
         copy_effective_action_field!(remove_worktree, keybinds.remove_worktree);
+        copy_effective_action_field!(move_worktree, keybinds.move_worktree);
         copy_effective_action_field!(rename_workspace, keybinds.rename_workspace);
         copy_effective_action_field!(close_workspace, keybinds.close_workspace);
         copy_effective_action_field!(workspace_picker, keybinds.workspace_picker);
@@ -1038,6 +1043,7 @@ impl Default for KeysConfig {
             new_worktree: BindingConfig::one("prefix+shift+g"),
             open_worktree: BindingConfig::empty(),
             remove_worktree: BindingConfig::empty(),
+            move_worktree: BindingConfig::one("prefix+shift+m"),
             rename_workspace: BindingConfig::one("prefix+shift+w"),
             close_workspace: BindingConfig::one("prefix+shift+d"),
             workspace_picker: BindingConfig::one("prefix+w"),

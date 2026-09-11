@@ -33,6 +33,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::WorkspaceRename(_)
             | Method::WorkspaceMove(_)
             | Method::WorkspaceMoveBlock(_)
+            | Method::WorkspaceReparent(_)
             | Method::WorkspaceReportMetadata(_)
             | Method::WorkspaceClose(_)
             | Method::WorktreeCreate(_)
@@ -97,4 +98,37 @@ pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;
 
 pub fn socket_path() -> PathBuf {
     crate::session::active_api_socket_path()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A method that mutates sidebar-visible state but is missing from
+    /// `request_changes_ui` applies and persists without the server ever running
+    /// a render pass, so the diff-based client-shell projection is never pushed
+    /// and the change stays invisible until restart.
+    #[test]
+    fn workspace_grouping_methods_change_the_ui() {
+        for method in [
+            Method::WorkspaceReparent(crate::api::schema::WorkspaceReparentParams {
+                workspace_id: "w1".into(),
+                parent_workspace_id: Some("w2".into()),
+            }),
+            Method::WorkspaceReparent(crate::api::schema::WorkspaceReparentParams {
+                workspace_id: "w1".into(),
+                parent_workspace_id: None,
+            }),
+        ] {
+            let name = api_method_name(&method);
+            assert!(
+                request_changes_ui(&Request {
+                    id: "r1".into(),
+                    method,
+                }),
+                "{name} mutates sidebar-visible state and must be listed in \
+                 request_changes_ui, or the sidebar never re-renders"
+            );
+        }
+    }
 }

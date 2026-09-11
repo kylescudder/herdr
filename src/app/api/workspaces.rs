@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::api::schema::{
     EventData, EventEnvelope, EventKind, ResponseResult, WorkspaceCloseParams,
     WorkspaceCreateParams, WorkspaceMoveBlockParams, WorkspaceMoveParams, WorkspaceRenameParams,
-    WorkspaceReportMetadataParams, WorkspaceTarget,
+    WorkspaceReparentParams, WorkspaceReportMetadataParams, WorkspaceTarget,
 };
 use crate::app::App;
 
@@ -129,6 +129,57 @@ impl App {
                 workspace: self.workspace_info(index),
             },
         )
+    }
+
+    pub(super) fn handle_workspace_reparent(
+        &mut self,
+        id: String,
+        params: WorkspaceReparentParams,
+    ) -> String {
+        let Some(index) = self.parse_workspace_id(&params.workspace_id) else {
+            return workspace_not_found(id, &params.workspace_id);
+        };
+        let parent_id = match &params.parent_workspace_id {
+            None => None,
+            Some(requested) => {
+                let Some(parent_index) = self.parse_workspace_id(requested) else {
+                    return workspace_not_found(id, requested);
+                };
+                if parent_index == index {
+                    return encode_error(
+                        id,
+                        "workspace_reparent_failed",
+                        "a workspace cannot be filed under itself".to_string(),
+                    );
+                }
+                // Reject cycles: the chosen parent must not descend from `index`.
+                let child_id = self.state.workspaces[index].id.clone();
+                let mut cursor = Some(parent_index);
+                for _ in 0..self.state.workspaces.len() {
+                    let Some(current) = cursor else { break };
+                    if self.state.workspaces[current].id == child_id {
+                        return encode_error(
+                            id,
+                            "workspace_reparent_failed",
+                            "reparenting would create a grouping cycle".to_string(),
+                        );
+                    }
+                    cursor = self.state.workspaces[current]
+                        .parent_workspace_id
+                        .clone()
+                        .and_then(|pid| self.state.workspaces.iter().position(|ws| ws.id == pid));
+                }
+                Some(self.state.workspaces[parent_index].id.clone())
+            }
+        };
+        self.state.workspaces[index].parent_workspace_id = parent_id;
+        self.schedule_session_save();
+        let workspaces = self.workspace_list_info();
+        // Grouping is sidebar-visible state. `api::request_changes_ui` must list
+        // this method, or the server never runs a render pass and the diff-based
+        // client-shell projection is never pushed: the reparent would persist
+        // silently while the sidebar kept the old grouping until a restart.
+        encode_success(id, ResponseResult::WorkspaceList { workspaces })
     }
 
     pub(super) fn handle_workspace_move(
@@ -848,6 +899,64 @@ mod tests {
             &event.data,
             EventData::WorkspaceMetadataUpdated { workspace } if workspace.tokens.is_empty()
         )));
+    }
+
+    #[test]
+    fn api_workspace_reparent_files_unfiles_and_rejects_cycles() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub,
+        );
+        app.state.workspaces = vec![Workspace::test_new("child"), Workspace::test_new("parent")];
+        let child = app.public_workspace_id(0);
+        let parent = app.public_workspace_id(1);
+
+        // File child under parent.
+        let response = app.handle_workspace_reparent(
+            "r1".into(),
+            WorkspaceReparentParams {
+                workspace_id: child.clone(),
+                parent_workspace_id: Some(parent.clone()),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(
+            success.result,
+            ResponseResult::WorkspaceList { .. }
+        ));
+        assert_eq!(
+            app.state.workspaces[0].parent_workspace_id.as_deref(),
+            Some(parent.as_str())
+        );
+
+        // Filing parent under child would form a cycle: rejected, state intact.
+        let response = app.handle_workspace_reparent(
+            "r2".into(),
+            WorkspaceReparentParams {
+                workspace_id: parent.clone(),
+                parent_workspace_id: Some(child.clone()),
+            },
+        );
+        assert!(
+            response.contains("workspace_reparent_failed"),
+            "cycle should be rejected: {response}"
+        );
+        assert!(app.state.workspaces[1].parent_workspace_id.is_none());
+
+        // Unfile child.
+        app.handle_workspace_reparent(
+            "r3".into(),
+            WorkspaceReparentParams {
+                workspace_id: child.clone(),
+                parent_workspace_id: None,
+            },
+        );
+        assert!(app.state.workspaces[0].parent_workspace_id.is_none());
     }
 
     #[test]

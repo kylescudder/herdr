@@ -39,6 +39,13 @@ pub(super) fn snapshot(
         .enumerate()
         .map(|(workspace_index, (workspace, state))| {
             let mut tokens = workspace.tokens.into_iter().collect::<Vec<_>>();
+            // Carry the explicit-parent grouping link to the client. The name is
+            // not a rendered token template, so it stays invisible in the UI and
+            // only the sidebar grouping reads it (the client snapshot codec is
+            // frozen, so an existing value-level field is the additive-safe path).
+            if let Some(parent) = state.parent_workspace_id.clone() {
+                tokens.push((protocol::PARENT_WORKSPACE_TOKEN.to_string(), parent));
+            }
             tokens.sort_by(|left, right| left.0.cmp(&right.0));
             let workspace_id = workspace.workspace_id;
             let active_tab_id = location
@@ -542,6 +549,69 @@ fn split_hit_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_carries_the_explicit_parent_link_as_a_public_workspace_id() {
+        // End-to-end across the server half: a real reparent must surface in the
+        // projection as a token whose value is the parent's *public* workspace
+        // id, since that is what the client sidebar matches against.
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![
+            crate::workspace::Workspace::test_new("child"),
+            crate::workspace::Workspace::test_new("parent"),
+        ];
+        let child = app.public_workspace_id(0);
+        let parent = app.public_workspace_id(1);
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "r1".into(),
+            method: crate::api::schema::Method::WorkspaceReparent(
+                crate::api::schema::WorkspaceReparentParams {
+                    workspace_id: child.clone(),
+                    parent_workspace_id: Some(parent.clone()),
+                },
+            ),
+        });
+        assert!(
+            !response.contains("error"),
+            "reparent should succeed: {response}"
+        );
+
+        let snapshot = snapshot(&app, "boot", 1, None, None);
+        let projected = snapshot
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == child)
+            .expect("child workspace is projected");
+        let token = projected
+            .tokens
+            .iter()
+            .find(|(name, _)| name == protocol::PARENT_WORKSPACE_TOKEN)
+            .map(|(_, value)| value.as_str());
+
+        assert_eq!(
+            token,
+            Some(parent.as_str()),
+            "the parent token must equal the parent's public workspace id so the \
+             sidebar can resolve it; tokens were {:?}",
+            projected.tokens
+        );
+        // And it must resolve to a workspace the client can actually see.
+        assert!(
+            snapshot
+                .workspaces
+                .iter()
+                .any(|workspace| Some(workspace.workspace_id.as_str()) == token),
+            "the parent token must reference a projected workspace"
+        );
+    }
 
     #[test]
     fn snapshot_projects_cached_release_and_update_facts() {

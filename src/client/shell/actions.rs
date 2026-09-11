@@ -136,6 +136,24 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if action == crate::input::KeybindAction::MoveWorktreeToWorkspace {
+                    // Opens the modal "move to workspace" picker, matching the
+                    // original feature. Prefer the workspace selected in the
+                    // sidebar picker, else the focused one.
+                    let source = self.navigate_workspace_id.clone().or_else(|| {
+                        self.snapshot
+                            .as_deref()
+                            .and_then(|snapshot| snapshot.focused_workspace_id.clone())
+                    });
+                    if let Some(source) = source {
+                        if self.open_move_workspace_overlay(source) {
+                            self.mode = self.copy_or_terminal_mode();
+                            self.navigate_workspace_id = None;
+                            outcome.repaint = true;
+                        }
+                    }
+                    return;
+                }
                 if action == crate::input::KeybindAction::EnterResizeMode {
                     self.mode = ClientShellMode::Resize;
                     outcome.repaint = true;
@@ -874,42 +892,20 @@ impl ClientShellState {
         up: bool,
     ) -> Option<crate::api::schema::Method> {
         let snapshot = self.snapshot.as_deref()?;
-        let source = snapshot
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.workspace_id == source_workspace_id)?;
-        let source_root = match source.worktree.as_ref() {
-            Some(worktree) if worktree.is_linked_worktree => snapshot
-                .workspaces
-                .iter()
-                .find(|candidate| {
-                    candidate.worktree.as_ref().is_some_and(|candidate| {
-                        !candidate.is_linked_worktree && candidate.key == worktree.key
-                    })
-                })
-                .map(|primary| primary.workspace_id.clone())?,
-            _ => source.workspace_id.clone(),
-        };
-        let roots = snapshot
-            .workspaces
-            .iter()
-            .filter(|workspace| {
-                !workspace
-                    .worktree
-                    .as_ref()
-                    .is_some_and(|worktree| worktree.is_linked_worktree)
-            })
-            .map(|workspace| workspace.workspace_id.as_str())
-            .collect::<Vec<_>>();
+        // Reorder the top-level row this workspace belongs to, using the same
+        // grouping the sidebar renders. A workspace filed under another (or a
+        // linked worktree) moves its parent's block, not itself.
+        let (source_root, _) = super::render::workspace_group_block(snapshot, source_workspace_id)?;
+        let roots = super::render::top_level_workspace_ids(snapshot);
         let position = roots.iter().position(|id| *id == source_root)?;
         let before = if up {
             // Land before the previous root. No-op at the top.
-            Some(roots.get(position.checked_sub(1)?)?.to_string())
+            Some(roots.get(position.checked_sub(1)?)?.clone())
         } else {
             // Jump the next root; land before the one after it, or append when
             // the next root is last. No-op at the bottom.
             roots.get(position + 1)?;
-            roots.get(position + 2).map(|id| id.to_string())
+            roots.get(position + 2).cloned()
         };
         self.workspace_move_method(&source_root, before.as_deref())
     }

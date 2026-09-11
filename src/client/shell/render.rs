@@ -11,7 +11,10 @@ pub(super) use super::agent_sidebar::{ordered_agent_pane_ids, render_agent_panel
 pub(super) use overlays::{
     client_navigator_rows, render_client_overlay, render_context_menu, render_global_menu,
 };
-pub(super) use sidebar::{render_collapsed_sidebar, render_sidebar, workspace_entries};
+pub(super) use sidebar::{
+    group_collapse_key, render_collapsed_sidebar, render_sidebar, top_level_workspace_ids,
+    workspace_entries, workspace_group_block,
+};
 pub(super) use tabs::{render_tab_bar, tab_bar_status_width};
 pub(super) fn render_mode_bar(
     buffer: &mut Buffer,

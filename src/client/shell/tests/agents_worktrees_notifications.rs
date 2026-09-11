@@ -142,7 +142,8 @@ fn grouped_worktrees_render_parent_branch_and_indented_child() {
     replacement.workspaces[1].agent_status = AgentStatus::Blocked;
     let mut replacement_surface = surface();
     replacement_surface.projection_revision = 2;
-    state.collapsed_groups.insert("repo".into());
+    // Groups collapse by the parent workspace id (ws_1), not the git repo key.
+    state.collapsed_groups.insert("ws_1".into());
     state.set_snapshot(Box::new(replacement));
     state.set_pane_surface(replacement_surface);
     let collapsed = state.compose(106, 20).expect("collapsed worktree group");
@@ -328,6 +329,332 @@ fn move_workspace_keybind_at_top_is_noop() {
         )),
         "top project must not emit a move: {:?}",
         up.actions
+    );
+}
+
+#[test]
+fn reorder_moves_an_explicit_parent_group_as_one_block() {
+    // Reorder must use the sidebar's grouping. A workspace with an explicitly
+    // filed child moves as a block, and the child is not independently
+    // reorderable, or shift+j/k silently does nothing once anything is nested.
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    for (index, label) in [(2, "middle"), (3, "child")] {
+        let mut extra = snapshot.workspaces[0].clone();
+        extra.workspace_id = format!("ws_{index}");
+        extra.number = index;
+        extra.label = label.into();
+        extra.focused = false;
+        snapshot.workspaces.push(extra);
+    }
+    // ws_3 is filed under ws_1, so the top-level rows are ws_1 then ws_2.
+    snapshot.workspaces[2].tokens.push((
+        crate::protocol::PARENT_WORKSPACE_TOKEN.into(),
+        "ws_1".into(),
+    ));
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    // Moving the parent down carries its child as a block.
+    let method = state
+        .workspace_reorder_method("ws_1", false)
+        .expect("parent should reorder");
+    assert!(
+        matches!(
+            &method,
+            crate::api::schema::Method::WorkspaceMoveBlock(params)
+                if params.workspace_ids == vec!["ws_1".to_owned(), "ws_3".to_owned()]
+        ),
+        "parent must move with its child: {method:?}"
+    );
+
+    // The nested child resolves to its parent rather than moving alone.
+    let from_child = state
+        .workspace_reorder_method("ws_3", false)
+        .expect("child should reorder its parent group");
+    assert!(
+        matches!(
+            &from_child,
+            crate::api::schema::Method::WorkspaceMoveBlock(params)
+                if params.workspace_ids == vec!["ws_1".to_owned(), "ws_3".to_owned()]
+        ),
+        "child must move its parent's block: {from_child:?}"
+    );
+
+    // An ungrouped top-level workspace still moves on its own.
+    let lone = state
+        .workspace_reorder_method("ws_2", true)
+        .expect("middle workspace should reorder");
+    assert!(
+        matches!(
+            &lone,
+            crate::api::schema::Method::WorkspaceMove(params) if params.workspace_id == "ws_2"
+        ),
+        "lone workspace moves singly: {lone:?}"
+    );
+}
+
+/// Two workspaces: focused "ws_1" plus a "parent" candidate to file it under.
+fn move_picker_state() -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut snapshot = snapshot();
+    let mut second = snapshot.workspaces[0].clone();
+    second.workspace_id = "ws_2".into();
+    second.number = 2;
+    second.label = "parent".into();
+    second.focused = false;
+    snapshot.workspaces.push(second);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+    state
+}
+
+#[test]
+fn move_worktree_keybind_opens_the_move_workspace_picker() {
+    // The original feature drew a modal picker; the keybind must open it rather
+    // than silently repurposing sidebar navigation.
+    let mut state = move_picker_state();
+
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::MoveWorktreeToWorkspace),
+        &mut out,
+    );
+
+    let Some(ClientShellOverlay::MoveWorkspace(picker)) = state.overlay.as_ref() else {
+        panic!(
+            "expected the move-to-workspace picker, got {:?}",
+            state.overlay
+        );
+    };
+    assert_eq!(picker.workspace_id, "ws_1");
+    // "top level" plus every other workspace.
+    assert_eq!(
+        picker
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["top level", "parent"]
+    );
+}
+
+#[test]
+fn move_workspace_picker_renders_a_modal_listing_targets() {
+    let mut state = move_picker_state();
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::MoveWorktreeToWorkspace),
+        &mut out,
+    );
+
+    let frame = state.compose(106, 24).expect("composed frame");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for expected in ["move", "top level", "parent", "esc cancel"] {
+        assert!(
+            text.contains(expected),
+            "picker must render {expected:?}; frame was:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn move_workspace_picker_files_under_the_selected_target() {
+    let mut state = move_picker_state();
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::MoveWorktreeToWorkspace),
+        &mut out,
+    );
+
+    // j moves off "top level" onto the parent workspace, enter commits.
+    state.handle_input_bytes(b"j");
+    let filed = state.handle_input_bytes(b"\r");
+    let [ClientShellAction::Endpoint { request, .. }] = &filed.actions[..] else {
+        panic!("expected a reparent endpoint, got {:?}", filed.actions);
+    };
+    assert!(
+        matches!(
+            &request.method,
+            crate::api::schema::Method::WorkspaceReparent(params)
+                if params.workspace_id == "ws_1"
+                    && params.parent_workspace_id.as_deref() == Some("ws_2")
+        ),
+        "got {:?}",
+        request.method
+    );
+}
+
+#[test]
+fn move_workspace_picker_top_level_entry_unfiles() {
+    let mut state = move_picker_state();
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::MoveWorktreeToWorkspace),
+        &mut out,
+    );
+
+    // "top level" is selected first, so enter unfiles to the top level.
+    let filed = state.handle_input_bytes(b"\r");
+    let [ClientShellAction::Endpoint { request, .. }] = &filed.actions[..] else {
+        panic!("expected a reparent endpoint, got {:?}", filed.actions);
+    };
+    assert!(
+        matches!(
+            &request.method,
+            crate::api::schema::Method::WorkspaceReparent(params)
+                if params.workspace_id == "ws_1" && params.parent_workspace_id.is_none()
+        ),
+        "got {:?}",
+        request.method
+    );
+}
+
+#[test]
+fn move_workspace_picker_escape_cancels_without_moving() {
+    let mut state = move_picker_state();
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::MoveWorktreeToWorkspace),
+        &mut out,
+    );
+
+    let cancelled = state.handle_input_bytes(b"\x1b");
+    assert!(state.overlay.is_none(), "esc must close the picker");
+    assert!(
+        cancelled.actions.is_empty(),
+        "esc must not move anything: {:?}",
+        cancelled.actions
+    );
+}
+
+#[test]
+fn shift_m_opens_the_move_picker_from_inside_the_workspace_picker() {
+    // Real user flow: prefix+w to list workspaces, then shift+m on the
+    // selection. Dispatching from Navigate mode must still open the modal.
+    let mut state = move_picker_state();
+    state.compose(106, 24).expect("composed frame");
+
+    let (prefix_key, prefix_modifiers) = state.config.keybinds.prefix;
+    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        prefix_key,
+        prefix_modifiers,
+    ))]);
+    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        KeyCode::Char('w'),
+        KeyModifiers::empty(),
+    ))]);
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+
+    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        KeyCode::Char('M'),
+        KeyModifiers::SHIFT,
+    ))]);
+    let Some(ClientShellOverlay::MoveWorkspace(picker)) = state.overlay.as_ref() else {
+        panic!(
+            "shift+m inside the workspace picker must open the move picker, got {:?}",
+            state.overlay
+        );
+    };
+    assert_eq!(picker.workspace_id, "ws_1");
+}
+
+#[test]
+fn move_workspace_picker_starts_on_the_current_parent() {
+    let mut state = move_picker_state();
+    // Pretend ws_1 is already filed under ws_2.
+    let mut updated = (**state.snapshot.as_ref().expect("snapshot")).clone();
+    updated.revision = 2;
+    updated.workspaces[0].tokens.push((
+        crate::protocol::PARENT_WORKSPACE_TOKEN.into(),
+        "ws_2".into(),
+    ));
+    let mut surface = surface();
+    surface.projection_revision = 2;
+    state.set_snapshot(Box::new(updated));
+    state.set_pane_surface(surface);
+
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::MoveWorktreeToWorkspace),
+        &mut out,
+    );
+    let Some(ClientShellOverlay::MoveWorkspace(picker)) = state.overlay.as_ref() else {
+        panic!("expected the move picker, got {:?}", state.overlay);
+    };
+    assert_eq!(
+        picker.selected_target_id().as_deref(),
+        Some("ws_2"),
+        "the picker should open on the current parent"
+    );
+}
+
+#[test]
+fn explicit_parent_token_nests_under_chosen_workspace() {
+    // odyssey + bifrost share one monorepo (same repo key, non-linked) so they
+    // stay separate top-level. A worktree explicitly filed under bifrost nests
+    // under bifrost even though the git key alone could not disambiguate.
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "odyssey".into();
+    snapshot.workspaces[0].workspace_id = "ws_1".into();
+    snapshot.workspaces[0].worktree = Some(ClientShellWorktree {
+        key: "monorepo".into(),
+        label: "monorepo".into(),
+        is_linked_worktree: false,
+    });
+    for (index, label, linked, parent) in [
+        (2, "bifrost", false, None),
+        (3, "feature", true, Some("ws_2")),
+    ] {
+        let mut ws = snapshot.workspaces[0].clone();
+        ws.workspace_id = format!("ws_{index}");
+        ws.number = index;
+        ws.label = label.into();
+        ws.focused = false;
+        ws.worktree = Some(ClientShellWorktree {
+            key: "monorepo".into(),
+            label: "monorepo".into(),
+            is_linked_worktree: linked,
+        });
+        if let Some(parent) = parent {
+            ws.tokens.push((
+                crate::protocol::PARENT_WORKSPACE_TOKEN.into(),
+                parent.into(),
+            ));
+        }
+        snapshot.workspaces.push(ws);
+    }
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+    state.compose(106, 20).expect("composed frame");
+
+    let hit = |id: &str| {
+        state
+            .hits
+            .workspaces
+            .iter()
+            .find(|hit| hit.workspace_id == id)
+            .unwrap_or_else(|| panic!("hit for {id}"))
+            .indented
+    };
+    assert!(!hit("ws_1"), "odyssey stays top-level");
+    assert!(!hit("ws_2"), "bifrost stays top-level");
+    assert!(
+        hit("ws_3"),
+        "the worktree nests under its explicit parent bifrost"
     );
 }
 
