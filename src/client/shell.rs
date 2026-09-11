@@ -19,6 +19,7 @@ mod scroll;
 mod settings;
 mod state;
 mod surface_patch;
+mod workspace_grouping;
 mod worktrees;
 
 pub(crate) use state::*;

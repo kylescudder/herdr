@@ -80,6 +80,16 @@ Design facts that are easy to get wrong:
   (`top_level_workspace_ids` / `workspace_group_block`). When they diverged,
   `shift+j/k` silently did nothing for any nested workspace.
 
+Fork-owned modules (new files, so upstream merges cannot conflict with them):
+
+| File | Holds |
+| --- | --- |
+| `src/client/shell/workspace_grouping.rs` | the grouping source of truth |
+| `src/client/shell/tests/fork_grouping.rs` | grouping, picker and reorder tests |
+| `src/fork_contract.rs` | the hook guards |
+
+Everything else the feature needs is a hook listed above.
+
 ### Monorepo top-level spaces
 
 Two non-linked workspaces sharing a git-common-dir key must stay **separate
@@ -103,6 +113,10 @@ Three tests fail in the Linux dev container for environmental reasons, not code:
 - `inactive_owner_cancels_idle_stream_and_dispatches_close` — concurrency timing
 - `unreadable_loose_ref_dir_is_unavailable_not_absent` — container runs as root,
   so `chmod 0o000` is bypassed
+- `pty::actor::unix::tests::actor_delays_enter_from_completed_prompt_write` —
+  intermittent under full-suite concurrency; passes in isolation
+
+Re-run a suspected flake on its own before believing it. All four pass on CI.
 
 Exclude with:
 
