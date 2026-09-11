@@ -1092,6 +1092,13 @@
               "minimum": 0,
               "type": "integer"
             },
+            "parent_workspace_id": {
+              "description": "The workspace this one is explicitly filed under, if any. Absent when it\nsits at the top level, including when a linked worktree was explicitly\nunfiled; grouping inferred from git is not reported here.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "tab_count": {
               "format": "uint",
               "minimum": 0,
@@ -10669,6 +10676,13 @@
               "format": "uint",
               "minimum": 0,
               "type": "integer"
+            },
+            "parent_workspace_id": {
+              "description": "The workspace this one is explicitly filed under, if any. Absent when it\nsits at the top level, including when a linked worktree was explicitly\nunfiled; grouping inferred from git is not reported here.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "tab_count": {
               "format": "uint",

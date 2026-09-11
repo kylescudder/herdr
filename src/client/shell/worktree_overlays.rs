@@ -331,12 +331,17 @@ pub(super) fn render_move_workspace_overlay(
     let first = move_overlay
         .selected
         .saturating_sub(visible.saturating_sub(1));
+    let mut row_hits = Vec::new();
     for (offset, index) in (first..move_overlay.entries.len())
         .take(visible)
         .enumerate()
     {
         let entry = &move_overlay.entries[index];
         let selected = index == move_overlay.selected;
+        row_hits.push((
+            Rect::new(inner.x, inner.y + 3 + offset as u16, inner.width, 1),
+            index,
+        ));
         let style = if selected {
             Style::default()
                 .fg(contrast(p))
@@ -412,6 +417,9 @@ pub(super) fn render_move_workspace_overlay(
         primary: *primary,
         cancel: *cancel,
         clear: Rect::default(),
+        // Reuses the worktree row hit channel; the mouse router dispatches on
+        // the active overlay, so the rows cannot be confused with another's.
+        worktree_rows: row_hits,
         cursor: None,
         ..OverlayRender::default()
     })

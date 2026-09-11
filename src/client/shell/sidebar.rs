@@ -1,6 +1,4 @@
-use super::super::workspace_grouping::{
-    parent_group_key, workspace_entries, workspace_group_layout,
-};
+use super::super::workspace_grouping::WorkspaceGrouping;
 use super::*;
 use ratatui::{
     text::Line,
@@ -210,7 +208,10 @@ pub(crate) fn render_sidebar(
             .add_modifier(Modifier::BOLD),
     );
 
-    let entries = workspace_entries(snapshot, state.collapsed_groups);
+    // Computed once: this is the pane-scaled render path, and the per-row
+    // helpers below would otherwise each rebuild the whole layout.
+    let grouping = WorkspaceGrouping::compute(snapshot);
+    let entries = grouping.entries(snapshot, state.collapsed_groups);
     let body = Rect::new(
         workspace_area.x,
         workspace_area.y.saturating_add(WORKSPACE_HEADER_ROWS),
@@ -229,7 +230,13 @@ pub(crate) fn render_sidebar(
                 .map(|workspace| {
                     workspace_rows(
                         workspace,
-                        displayed_workspace_status(snapshot, workspace, state.collapsed_groups),
+                        displayed_workspace_status(
+                            &grouping,
+                            snapshot,
+                            workspace,
+                            entry.index,
+                            state.collapsed_groups,
+                        ),
                         entry.indented,
                         &config.spaces,
                     )
@@ -287,7 +294,13 @@ pub(crate) fn render_sidebar(
         let Some(workspace) = snapshot.workspaces.get(entry.index) else {
             continue;
         };
-        let status = displayed_workspace_status(snapshot, workspace, state.collapsed_groups);
+        let status = displayed_workspace_status(
+            &grouping,
+            snapshot,
+            workspace,
+            entry.index,
+            state.collapsed_groups,
+        );
         let rows = workspace_rows(workspace, status, entry.indented, &config.spaces);
         let row_height = (rows.len().max(1).min(u16::MAX as usize) as u16).min(body.height);
         if y.saturating_add(row_height) > body.bottom() {
@@ -315,7 +328,7 @@ pub(crate) fn render_sidebar(
             dragged,
             palette,
         );
-        let group_toggle = parent_group_key(snapshot, entry.index).map(|key| {
+        let group_toggle = grouping.group_key(snapshot, entry.index).map(|key| {
             let rect = Rect::new(rect.right().saturating_sub(1), rect.y, 1, 1);
             put_text(
                 buffer,
@@ -455,24 +468,19 @@ pub(crate) fn render_sidebar_background(buffer: &mut Buffer, area: Rect, palette
 }
 
 fn displayed_workspace_status(
+    grouping: &WorkspaceGrouping,
     snapshot: &ClientShellSnapshot,
     workspace: &ClientShellWorkspace,
+    index: usize,
     collapsed_groups: &HashSet<String>,
 ) -> crate::api::schema::AgentStatus {
     if !collapsed_groups.contains(&workspace.workspace_id) {
         return workspace.agent_status;
     }
-    let Some(index) = snapshot
-        .workspaces
-        .iter()
-        .position(|candidate| candidate.workspace_id == workspace.workspace_id)
-    else {
+    let children = grouping.children(index);
+    if children.is_empty() {
         return workspace.agent_status;
-    };
-    let (_, children_of) = workspace_group_layout(snapshot);
-    let Some(children) = children_of.get(&index) else {
-        return workspace.agent_status;
-    };
+    }
     children
         .iter()
         .map(|child| snapshot.workspaces[*child].agent_status)

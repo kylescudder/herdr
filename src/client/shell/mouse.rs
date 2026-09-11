@@ -1326,9 +1326,26 @@ impl ClientShellState {
                 ClientShellOverlay::WorktreeCreate(_)
                     | ClientShellOverlay::WorktreeOpen(_)
                     | ClientShellOverlay::WorktreeRemove(_)
+                    | ClientShellOverlay::MoveWorkspace(_)
             )
         ) {
             match mouse.kind {
+                MouseEventKind::ScrollUp
+                    if matches!(self.overlay, Some(ClientShellOverlay::MoveWorkspace(_))) =>
+                {
+                    if let Some(ClientShellOverlay::MoveWorkspace(picker)) = self.overlay.as_mut() {
+                        picker.move_selection(-1);
+                    }
+                    outcome.repaint = true;
+                }
+                MouseEventKind::ScrollDown
+                    if matches!(self.overlay, Some(ClientShellOverlay::MoveWorkspace(_))) =>
+                {
+                    if let Some(ClientShellOverlay::MoveWorkspace(picker)) = self.overlay.as_mut() {
+                        picker.move_selection(1);
+                    }
+                    outcome.repaint = true;
+                }
                 MouseEventKind::ScrollUp
                     if matches!(self.overlay, Some(ClientShellOverlay::WorktreeOpen(_))) =>
                 {
@@ -1353,6 +1370,8 @@ impl ClientShellState {
                                         ClientWorktreeOpenOverlay { opening: true, .. }
                                     ) | ClientShellOverlay::WorktreeRemove(
                                         ClientWorktreeRemoveOverlay { removing: true, .. }
+                                    ) | ClientShellOverlay::MoveWorkspace(
+                                        ClientMoveWorkspaceOverlay { moving: true, .. }
                                     )
                                 )
                             );
@@ -1373,11 +1392,17 @@ impl ClientShellState {
                         .find(|(rect, _)| super::contains(*rect, point))
                         .copied()
                     {
-                        if let Some(ClientShellOverlay::WorktreeOpen(open)) = self.overlay.as_mut()
-                        {
-                            open.selected = index;
+                        match self.overlay.as_mut() {
+                            Some(ClientShellOverlay::WorktreeOpen(open)) => {
+                                open.selected = index;
+                                self.submit_worktree_open(outcome);
+                            }
+                            Some(ClientShellOverlay::MoveWorkspace(picker)) => {
+                                picker.selected = index;
+                                self.submit_move_workspace(outcome);
+                            }
+                            _ => {}
                         }
-                        self.submit_worktree_open(outcome);
                     } else if super::contains(self.hits.overlay_primary, point) {
                         match self.overlay.as_ref() {
                             Some(ClientShellOverlay::WorktreeCreate(_)) => {
@@ -1388,6 +1413,9 @@ impl ClientShellState {
                             }
                             Some(ClientShellOverlay::WorktreeRemove(_)) => {
                                 self.submit_worktree_remove(outcome)
+                            }
+                            Some(ClientShellOverlay::MoveWorkspace(_)) => {
+                                self.submit_move_workspace(outcome)
                             }
                             _ => {}
                         }

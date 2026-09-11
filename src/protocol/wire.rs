@@ -1038,6 +1038,15 @@ pub struct ClientShellWorktree {
 /// value-level field keeps the frozen generation-1 snapshot codec unchanged.
 pub const PARENT_WORKSPACE_TOKEN: &str = "herdr:parent";
 
+/// Sentinel `parent_workspace_id` meaning the user explicitly chose "top level".
+///
+/// Grouping is a tri-state: no explicit choice (infer a linked worktree's parent
+/// from git), filed under a workspace, or explicitly top level. Without the third
+/// state, unfiling a linked worktree stores `None` and the git fallback
+/// immediately re-infers its primary checkout, making the operation a silent
+/// no-op. The value cannot collide with a workspace id.
+pub const EXPLICIT_TOP_LEVEL_PARENT: &str = "herdr:top-level";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientShellTab {
     pub tab_id: String,

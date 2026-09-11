@@ -757,6 +757,7 @@ impl AppState {
         for idx in close_indices.iter().rev() {
             self.workspaces.remove(*idx);
         }
+        self.promote_orphaned_workspace_children();
         self.remove_unattached_terminal_ids(terminal_ids);
         if self.workspaces.is_empty() {
             self.active = None;
@@ -966,6 +967,35 @@ impl AppState {
             })
             .filter(|indices| indices.len() >= 2)
             .unwrap_or_else(|| vec![ws_idx])
+    }
+
+    /// Clears explicit grouping links that point at workspaces which no longer
+    /// exist, promoting those children back to the top level.
+    ///
+    /// Closing a parent must not leave a dangling `parent_workspace_id`: it is
+    /// persisted, and workspace ids are only reserved against surviving
+    /// workspaces, so after a restart a newly created workspace can reuse the
+    /// closed id and silently adopt the orphaned child.
+    pub(crate) fn promote_orphaned_workspace_children(&mut self) {
+        let live: std::collections::HashSet<&str> =
+            self.workspaces.iter().map(|ws| ws.id.as_str()).collect();
+        let orphaned: Vec<usize> = self
+            .workspaces
+            .iter()
+            .enumerate()
+            .filter_map(|(index, ws)| {
+                ws.parent_workspace_id
+                    .as_deref()
+                    .is_some_and(|parent| {
+                        parent != crate::protocol::EXPLICIT_TOP_LEVEL_PARENT
+                            && !live.contains(parent)
+                    })
+                    .then_some(index)
+            })
+            .collect();
+        for index in orphaned {
+            self.workspaces[index].parent_workspace_id = None;
+        }
     }
 
     pub(crate) fn workspace_close_would_close_worktree_group(&self, ws_idx: usize) -> bool {
@@ -2203,6 +2233,7 @@ impl AppState {
                 .map(|ws| ws.id.clone());
             let selected_workspace_id = self.workspaces.get(self.selected).map(|ws| ws.id.clone());
             self.workspaces.remove(ws_idx);
+            self.promote_orphaned_workspace_children();
             self.remove_unattached_terminal_ids(workspace_terminal_ids);
             if self.workspaces.is_empty() {
                 self.active = None;

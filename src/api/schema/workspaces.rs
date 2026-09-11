@@ -82,6 +82,11 @@ pub struct WorkspaceInfo {
     pub tokens: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorkspaceWorktreeInfo>,
+    /// The workspace this one is explicitly filed under, if any. Absent when it
+    /// sits at the top level, including when a linked worktree was explicitly
+    /// unfiled; grouping inferred from git is not reported here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

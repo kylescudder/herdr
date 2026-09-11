@@ -617,3 +617,46 @@ fn workspace_drag_moves_parent_worktree_as_one_block_and_rejects_child() {
     assert!(dragging_child.actions.is_empty());
     assert!(state.chrome_drag.is_none());
 }
+
+#[test]
+fn move_workspace_picker_files_a_clicked_target() {
+    // Herdr is mouse-first: clicking a target row must select and commit it,
+    // not dismiss the picker.
+    let mut state = move_picker_state();
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::MoveWorktreeToWorkspace),
+        &mut out,
+    );
+    state.compose(106, 24).expect("composed frame");
+
+    // Row 1 is the "parent" workspace ("top level" is row 0).
+    let (rect, _) = state
+        .hits
+        .worktree_rows
+        .iter()
+        .copied()
+        .find(|(_, index)| *index == 1)
+        .expect("picker should publish target row hits");
+
+    let clicked =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    let [ClientShellAction::Endpoint { request, .. }] = &clicked.actions[..] else {
+        panic!("clicking a target must file it, got {:?}", clicked.actions);
+    };
+    assert!(
+        matches!(
+            &request.method,
+            crate::api::schema::Method::WorkspaceReparent(params)
+                if params.workspace_id == "ws_1"
+                    && params.parent_workspace_id.as_deref() == Some("ws_2")
+        ),
+        "got {:?}",
+        request.method
+    );
+}

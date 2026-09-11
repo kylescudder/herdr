@@ -7,7 +7,13 @@ impl ClientContextMenuOverlay {
         let item = |label, action| ClientContextMenuItem { label, action };
         match &self.target {
             ClientContextMenuTarget::Workspace { is_git: false, .. } => {
-                vec![item("Rename", Action::Rename), item("Close", Action::Close)]
+                // Grouping is not git-derived, so a non-git workspace can be
+                // filed under another just like any other.
+                vec![
+                    item("Rename", Action::Rename),
+                    item("Close", Action::Close),
+                    item("Move to workspace...", Action::MoveToWorkspace),
+                ]
             }
             ClientContextMenuTarget::Workspace {
                 is_linked_worktree: false,

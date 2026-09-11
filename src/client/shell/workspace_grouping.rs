@@ -17,11 +17,72 @@ fn explicit_parent_id(workspace: &ClientShellWorkspace) -> Option<&str> {
         .map(|(_, value)| value.as_str())
 }
 
+/// The grouping computed once, so a render pass does not rebuild it per row.
+///
+/// `render_sidebar` runs on the pane-scaled render path, where `parent_group_key`
+/// and `displayed_workspace_status` are called for every visible workspace. Each
+/// of those rebuilding the layout made the sidebar O(n²) in allocations per
+/// frame; build it once and share it.
+pub(crate) struct WorkspaceGrouping {
+    parent_index: Vec<Option<usize>>,
+    children_of: std::collections::BTreeMap<usize, Vec<usize>>,
+}
+
+impl WorkspaceGrouping {
+    pub(crate) fn compute(snapshot: &ClientShellSnapshot) -> Self {
+        let (parent_index, children_of) = workspace_group_layout(snapshot);
+        Self {
+            parent_index,
+            children_of,
+        }
+    }
+
+    pub(crate) fn children(&self, index: usize) -> &[usize] {
+        self.children_of
+            .get(&index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// The collapse key for a row that heads a group, else `None`.
+    pub(crate) fn group_key(&self, snapshot: &ClientShellSnapshot, index: usize) -> Option<String> {
+        if !self.children_of.contains_key(&index) {
+            return None;
+        }
+        snapshot
+            .workspaces
+            .get(index)
+            .map(|workspace| workspace.workspace_id.clone())
+    }
+
+    pub(crate) fn entries(
+        &self,
+        snapshot: &ClientShellSnapshot,
+        collapsed_groups: &HashSet<String>,
+    ) -> Vec<WorkspaceEntry> {
+        entries_from_layout(
+            snapshot,
+            collapsed_groups,
+            &self.parent_index,
+            &self.children_of,
+        )
+    }
+}
+
 pub(crate) fn workspace_entries(
     snapshot: &ClientShellSnapshot,
     collapsed_groups: &HashSet<String>,
 ) -> Vec<WorkspaceEntry> {
     let (parent_index, children_of) = workspace_group_layout(snapshot);
+    entries_from_layout(snapshot, collapsed_groups, &parent_index, &children_of)
+}
+
+fn entries_from_layout(
+    snapshot: &ClientShellSnapshot,
+    collapsed_groups: &HashSet<String>,
+    parent_index: &[Option<usize>],
+    children_of: &std::collections::BTreeMap<usize, Vec<usize>>,
+) -> Vec<WorkspaceEntry> {
     let mut entries = Vec::new();
     for (index, parent) in parent_index.iter().enumerate() {
         // Children are emitted beneath their parent below, not at top level.
@@ -104,6 +165,10 @@ pub(crate) fn workspace_group_layout(
     let mut direct_parent = vec![None; workspaces.len()];
     for (index, workspace) in workspaces.iter().enumerate() {
         if let Some(parent_id) = explicit_parent_id(workspace) {
+            if parent_id == crate::protocol::EXPLICIT_TOP_LEVEL_PARENT {
+                // Explicitly top level: do not fall back to the git parent.
+                continue;
+            }
             if let Some(&parent) = id_to_index.get(parent_id) {
                 if parent != index {
                     direct_parent[index] = Some(parent);
