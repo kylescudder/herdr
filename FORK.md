@@ -56,6 +56,7 @@ assert on is private:
 | `client::shell::tests::…::move_worktree_keybind_opens_the_move_workspace_picker` | keybind opens the modal, not a navigation mode |
 | `client::shell::tests::…::shift_m_opens_the_move_picker_from_inside_the_workspace_picker` | dispatch from Navigate mode still opens the modal |
 | `client::shell::tests::…::move_workspace_picker_renders_a_modal_listing_targets` | the picker actually renders |
+| `client::shell::tests::…::sidebar_marks_the_active_and_hovered_rows_at_the_left_edge` | left-edge session indicators in the sidebar |
 | `server::client_shell::tests::snapshot_carries_the_explicit_parent_link_as_a_public_workspace_id` | projection emits the public id the client matches |
 | `config::tests::published_profile_keeps_the_move_worktree_binding` | binding survives the endpoint keybind profile round trip |
 
@@ -142,6 +143,23 @@ Easy to get wrong when re-porting:
 - `acknowledge_workspace` builds `PaneStateUpdate` with
   `suppress_completion: true` — it only flips `seen`, and must not fire a done
   notification.
+
+### Sidebar session indicators
+
+Left-edge markers in the workspace list: an accent bar (`▎`) spans the
+active workspace and an arrow (`❯`) marks the hovered/navigate-selected
+row. The arrow wins on a row that is both. Originally `72ea88e3`, lost in the
+v0.9.0 sync because it lived in `src/ui/sidebar.rs`, which upstream deleted.
+
+Easy to get wrong when re-porting:
+
+- The markers must be drawn **after** the row text, or the text overwrites
+  them. They occupy the row's first cell, which the row template leaves blank.
+- The bar spans every line of a multi-line row; the arrow is only on the first.
+- The original also brightened the hovered row, which upstream now themes via
+  `selection_bg`. That palette entry can be `Color::Reset`, leaving the hovered
+  row invisible, so the port falls back to `surface1` only in that case rather
+  than overriding a theme that sets a colour.
 
 ### Monorepo top-level spaces
 

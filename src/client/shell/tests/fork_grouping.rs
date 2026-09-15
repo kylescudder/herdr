@@ -725,3 +725,63 @@ fn reorder_moves_a_nested_workspace_within_its_group() {
         "a top-level row still moves as a block: {parent:?}"
     );
 }
+
+#[test]
+fn sidebar_marks_the_active_and_hovered_rows_at_the_left_edge() {
+    // Left-edge indicators: an accent bar spans the active workspace and an
+    // arrow marks the hovered/navigate row, drawn flush at the very edge after
+    // the row text so they are not overwritten.
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    let mut second = snapshot.workspaces[0].clone();
+    second.workspace_id = "ws_2".into();
+    second.number = 2;
+    second.label = "other".into();
+    second.focused = false;
+    snapshot.workspaces.push(second);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    // No selection yet: only the active workspace (ws_1) carries a bar.
+    let frame = state.compose(106, 20).expect("composed frame");
+    let row_start = |frame: &crate::protocol::FrameData, rect: Rect| -> String {
+        let index = usize::from(rect.y) * usize::from(frame.width) + usize::from(rect.x);
+        frame.cells[index].symbol.clone()
+    };
+    let active = state.hits.workspaces[0].rect;
+    let other = state.hits.workspaces[1].rect;
+    assert_eq!(
+        row_start(&frame, active),
+        "\u{258e}",
+        "the active workspace must show an accent bar at the left edge"
+    );
+    assert_eq!(
+        row_start(&frame, other),
+        " ",
+        "an inactive, unhovered row must not be marked"
+    );
+
+    // Enter the picker and select the other row: it gets the arrow.
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::WorkspacePicker),
+        &mut out,
+    );
+    state.handle_input_bytes(b"j");
+    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    let active = state.hits.workspaces[0].rect;
+    let other = state.hits.workspaces[1].rect;
+    assert_eq!(
+        row_start(&frame, other),
+        "\u{276f}",
+        "the hovered/navigate row must show an arrow"
+    );
+    assert_eq!(
+        row_start(&frame, active),
+        "\u{258e}",
+        "the active workspace keeps its bar while another row is hovered"
+    );
+}

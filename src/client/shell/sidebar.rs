@@ -310,7 +310,15 @@ pub(crate) fn render_sidebar(
         let selected = state.selected_workspace_id == Some(workspace.workspace_id.as_str());
         let dragged = state.dragged_workspace_id == Some(workspace.workspace_id.as_str());
         if selected {
-            buffer.set_style(rect, Style::default().bg(palette.selection_bg));
+            // A theme that leaves selection_bg unset would render the hovered
+            // row as a faint tint or nothing at all, so fall back to the
+            // brightest surface (what drag uses) to keep it unmistakable.
+            let background = if palette.selection_bg == ratatui::style::Color::Reset {
+                palette.surface1
+            } else {
+                palette.selection_bg
+            };
+            buffer.set_style(rect, Style::default().bg(background));
         } else if dragged {
             buffer.set_style(rect, Style::default().bg(palette.surface1));
         } else if workspace.focused {
@@ -328,6 +336,26 @@ pub(crate) fn render_sidebar(
             dragged,
             palette,
         );
+        // Left-edge markers, drawn after the row text so they sit flush at the
+        // very edge without being overwritten: an accent bar spans the active
+        // workspace, and an arrow marks the hovered/navigate row. The arrow
+        // wins on a row that is both active and hovered.
+        for row_index in 0..row_height {
+            let marker_y = rect.y.saturating_add(row_index);
+            if marker_y >= body.bottom() {
+                break;
+            }
+            if selected && row_index == 0 {
+                buffer[(rect.x, marker_y)]
+                    .set_symbol("\u{276f}")
+                    .set_fg(palette.accent);
+            } else if workspace.focused {
+                buffer[(rect.x, marker_y)]
+                    .set_symbol("\u{258e}")
+                    .set_fg(palette.accent);
+            }
+        }
+
         let group_toggle = grouping.group_key(snapshot, entry.index).map(|key| {
             let rect = Rect::new(rect.right().saturating_sub(1), rect.y, 1, 1);
             put_text(
