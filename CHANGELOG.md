@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.9.3] - 2026-09-16
+
+### Added
+- The sidebar marks the current and hovered sessions at the left edge: an accent bar spans the active workspace, and an arrow marks the row you are hovering or have selected in the workspace picker. On a theme that leaves the selection colour unset, such as the terminal 16-color theme, the hovered row falls back to a visible background instead of looking unselected.
+
 ## [0.9.2] - 2026-09-11
 
 ### Added
