@@ -1,7 +1,7 @@
 use super::*;
 
 #[path = "../shell/overlays.rs"]
-mod overlays;
+pub(crate) mod overlays;
 #[path = "../shell/sidebar.rs"]
 mod sidebar;
 #[path = "../shell/tabs.rs"]

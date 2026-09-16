@@ -725,3 +725,146 @@ fn reorder_moves_a_nested_workspace_within_its_group() {
         "a top-level row still moves as a block: {parent:?}"
     );
 }
+
+#[test]
+fn sidebar_marks_the_active_and_hovered_rows_at_the_left_edge() {
+    // Left-edge indicators: an accent bar spans the active workspace and an
+    // arrow marks the hovered/navigate row, drawn flush at the very edge after
+    // the row text so they are not overwritten.
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    let mut second = snapshot.workspaces[0].clone();
+    second.workspace_id = "ws_2".into();
+    second.number = 2;
+    second.label = "other".into();
+    second.focused = false;
+    snapshot.workspaces.push(second);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    // No selection yet: only the active workspace (ws_1) carries a bar.
+    let frame = state.compose(106, 20).expect("composed frame");
+    let row_start = |frame: &crate::protocol::FrameData, rect: Rect| -> String {
+        let index = usize::from(rect.y) * usize::from(frame.width) + usize::from(rect.x);
+        frame.cells[index].symbol.clone()
+    };
+    let active = state.hits.workspaces[0].rect;
+    let other = state.hits.workspaces[1].rect;
+    assert_eq!(
+        row_start(&frame, active),
+        "\u{258e}",
+        "the active workspace must show an accent bar at the left edge"
+    );
+    assert_eq!(
+        row_start(&frame, other),
+        " ",
+        "an inactive, unhovered row must not be marked"
+    );
+
+    // Enter the picker and select the other row: it gets the arrow.
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::WorkspacePicker),
+        &mut out,
+    );
+    state.handle_input_bytes(b"j");
+    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    let active = state.hits.workspaces[0].rect;
+    let other = state.hits.workspaces[1].rect;
+    assert_eq!(
+        row_start(&frame, other),
+        "\u{276f}",
+        "the hovered/navigate row must show an arrow"
+    );
+    assert_eq!(
+        row_start(&frame, active),
+        "\u{258e}",
+        "the active workspace keeps its bar while another row is hovered"
+    );
+}
+
+#[test]
+fn navigate_mode_shift_k_reorders_selected_project_in_place() {
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "a".into();
+    for (index, label) in [(2, "b"), (3, "c")] {
+        let mut ws = snapshot.workspaces[0].clone();
+        ws.workspace_id = format!("ws_{index}");
+        ws.number = index;
+        ws.label = label.into();
+        ws.focused = false;
+        snapshot.workspaces.push(ws);
+    }
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    state.handle_input_bytes(&[0x02]); // ctrl+b (prefix)
+    state.handle_input_bytes(b"w"); // enter Navigate mode (selects ws_1)
+    state.handle_input_bytes(b"j"); // move selection down -> ws_2 ("b")
+    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
+
+    // shift+k reorders "b" up, before "a", without leaving Navigate mode.
+    let reordered = state.handle_input_bytes(b"K");
+    let [ClientShellAction::Endpoint { request, .. }] = &reordered.actions[..] else {
+        panic!("expected a reorder endpoint, got {:?}", reordered.actions);
+    };
+    assert!(
+        matches!(
+            &request.method,
+            crate::api::schema::Method::WorkspaceMove(params)
+                if params.workspace_id == "ws_2" && params.insert_index == 0
+        ),
+        "got {:?}",
+        request.method
+    );
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
+}
+
+#[test]
+fn hovered_row_stays_visible_on_a_theme_with_no_selection_background() {
+    // The terminal 16-color theme leaves selection_bg as Reset, which would
+    // make the hovered row indistinguishable. The fallback must survive the
+    // row render: render_workspace_rows repaints the whole row rect last, so
+    // applying it only before that pass is silently overwritten.
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.palette = crate::app::state::Palette::terminal();
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    let mut second = snapshot.workspaces[0].clone();
+    second.workspace_id = "ws_2".into();
+    second.number = 2;
+    second.label = "other".into();
+    second.focused = false;
+    snapshot.workspaces.push(second);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::WorkspacePicker),
+        &mut out,
+    );
+    state.handle_input_bytes(b"j");
+    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    let hovered = state.hits.workspaces[1].rect;
+    // Sample past the left-edge marker cell, in the row's text area.
+    let index = usize::from(hovered.y) * usize::from(frame.width) + usize::from(hovered.x) + 3;
+    assert_eq!(
+        frame.cells[index].bg,
+        crate::protocol::color_to_u32(ratatui::style::Color::DarkGray),
+        "the hovered row must fall back to a visible background when the theme \
+         leaves selection_bg unset"
+    );
+    assert_ne!(
+        frame.cells[index].bg,
+        crate::protocol::color_to_u32(ratatui::style::Color::Reset),
+        "falling through to Reset leaves the hovered row unmarked"
+    );
+}

@@ -328,6 +328,16 @@ pub(crate) fn render_sidebar(
             dragged,
             palette,
         );
+        super::super::sidebar_indicators::draw_row_markers(
+            buffer,
+            rect,
+            row_height,
+            body.bottom(),
+            selected,
+            workspace.focused,
+            palette,
+        );
+
         let group_toggle = grouping.group_key(snapshot, entry.index).map(|key| {
             let rect = Rect::new(rect.right().saturating_sub(1), rect.y, 1, 1);
             put_text(
@@ -600,7 +610,9 @@ fn render_workspace_rows(
     }
 
     let background = if selected {
-        Some(palette.selection_bg)
+        Some(super::super::sidebar_indicators::hovered_row_background(
+            palette,
+        ))
     } else if dragged {
         Some(palette.surface1)
     } else if workspace.focused {
