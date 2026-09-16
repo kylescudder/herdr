@@ -6,6 +6,7 @@ mod composition;
 mod config;
 mod context_menu;
 mod copy_mode;
+mod fork_actions;
 mod global_menu;
 mod graphics;
 mod input;
@@ -17,11 +18,13 @@ mod preferences;
 mod render;
 mod scroll;
 mod settings;
+mod sidebar_indicators;
 mod state;
 mod surface_patch;
 mod workspace_grouping;
 mod worktrees;
 
+pub(crate) use render::overlays::move_workspace::ClientMoveWorkspaceOverlay;
 pub(crate) use state::*;
 #[cfg(test)]
 pub(super) use surface_patch::apply_composed_surface_patch;

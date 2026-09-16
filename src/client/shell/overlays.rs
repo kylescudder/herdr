@@ -1,5 +1,6 @@
 use super::*;
 
+pub(crate) mod move_workspace;
 mod settings_overlay;
 mod worktree_overlays;
 
@@ -72,7 +73,7 @@ pub(crate) fn render_client_overlay(
             worktree_overlays::render_worktree_remove_overlay(b, v, p)
         }
         ClientShellOverlay::MoveWorkspace(v) => {
-            worktree_overlays::render_move_workspace_overlay(b, v, p)
+            move_workspace::render_move_workspace_overlay(b, v, p)
         }
         ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_) => None,
     }

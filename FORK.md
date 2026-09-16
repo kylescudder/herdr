@@ -88,6 +88,44 @@ Every guard above has been verified to **fail** when its hook is removed. If you
 add a fork feature, add a guard for each hook it needs and verify the same way:
 delete the hook, watch the named test go red, restore it.
 
+## Fork-owned modules
+
+New files, so an upstream merge cannot conflict with them. Fork logic lives
+here; upstream files keep only the hooks.
+
+| File | Holds |
+| --- | --- |
+| `src/fork_contract.rs` | the hook guards |
+| `src/client/shell/workspace_grouping.rs` | the grouping source of truth |
+| `src/client/shell/overlays/move_workspace.rs` | the move-to-workspace picker: state, keys, submit, render |
+| `src/client/shell/fork_actions.rs` | the acknowledge and move-picker keybind actions, and keyboard reorder |
+| `src/client/shell/sidebar_indicators.rs` | the left-edge active/hovered row markers |
+| `src/app/api/fork_workspace_grouping.rs` | server-side `workspace.reparent` and `workspace.acknowledge` |
+| `src/app/fork_done_markers.rs` | acknowledgement and orphaned-child repair |
+| `src/client/shell/tests/fork_grouping.rs` | grouping, picker, reorder and indicator tests |
+
+`move_workspace.rs` is declared inside `overlays.rs` rather than `shell.rs` so
+`use super::*` reaches that file's private drawing helpers (`popup`, `panel`,
+`put_text`, `button`, `row`, `contrast`) without widening six upstream
+signatures. Keep it there; the alternative reintroduces six conflict points.
+
+What deliberately stays in upstream files, and cannot be extracted:
+
+- **Hooks** — enum variants, match arms, registration lists, keybind and config
+  tables. Each is guarded by a named test; see the table above.
+- **Deletions of upstream code the fork replaced.** `sidebar.rs` loses
+  `workspace_entries` / `parent_group_key` and `mouse.rs` rewrites
+  `workspace_move_method`, because grouping must have exactly **one** source of
+  truth. Leaving upstream's version in place as dead code is the bug that broke
+  `shift+j/k` for every nested workspace. `tests/agents_worktrees_notifications.rs`
+  loses two tests that assert the pre-fork grouping; replacements of the same
+  name live in `tests/fork_grouping.rs`.
+- **In-place semantic changes** to upstream functions, such as the completion
+  path in `src/app/actions.rs`.
+
+Extraction cut the fork's footprint in upstream files from 1911 lines to 1046,
+of which 167 are those deletions.
+
 ## Carried features
 
 ### Explicit workspace grouping + move-to-workspace picker
@@ -109,16 +147,6 @@ Design facts that are easy to get wrong:
 - Sidebar, keyboard reorder and mouse drag must share one grouping source
   (`top_level_workspace_ids` / `workspace_group_block`). When they diverged,
   `shift+j/k` silently did nothing for any nested workspace.
-
-Fork-owned modules (new files, so upstream merges cannot conflict with them):
-
-| File | Holds |
-| --- | --- |
-| `src/client/shell/workspace_grouping.rs` | the grouping source of truth |
-| `src/client/shell/tests/fork_grouping.rs` | grouping, picker and reorder tests |
-| `src/fork_contract.rs` | the hook guards |
-
-Everything else the feature needs is a hook listed above.
 
 ### Sticky done markers + acknowledge
 
