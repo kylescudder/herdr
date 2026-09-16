@@ -824,3 +824,47 @@ fn navigate_mode_shift_k_reorders_selected_project_in_place() {
     assert_eq!(state.mode, ClientShellMode::Navigate);
     assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
 }
+
+#[test]
+fn hovered_row_stays_visible_on_a_theme_with_no_selection_background() {
+    // The terminal 16-color theme leaves selection_bg as Reset, which would
+    // make the hovered row indistinguishable. The fallback must survive the
+    // row render: render_workspace_rows repaints the whole row rect last, so
+    // applying it only before that pass is silently overwritten.
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.palette = crate::app::state::Palette::terminal();
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    let mut second = snapshot.workspaces[0].clone();
+    second.workspace_id = "ws_2".into();
+    second.number = 2;
+    second.label = "other".into();
+    second.focused = false;
+    snapshot.workspaces.push(second);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::WorkspacePicker),
+        &mut out,
+    );
+    state.handle_input_bytes(b"j");
+    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    let hovered = state.hits.workspaces[1].rect;
+    // Sample past the left-edge marker cell, in the row's text area.
+    let index = usize::from(hovered.y) * usize::from(frame.width) + usize::from(hovered.x) + 3;
+    assert_eq!(
+        frame.cells[index].bg,
+        crate::protocol::color_to_u32(ratatui::style::Color::DarkGray),
+        "the hovered row must fall back to a visible background when the theme \
+         leaves selection_bg unset"
+    );
+    assert_ne!(
+        frame.cells[index].bg,
+        crate::protocol::color_to_u32(ratatui::style::Color::Reset),
+        "falling through to Reset leaves the hovered row unmarked"
+    );
+}

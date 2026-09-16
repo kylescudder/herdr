@@ -57,6 +57,7 @@ assert on is private:
 | `client::shell::tests::…::shift_m_opens_the_move_picker_from_inside_the_workspace_picker` | dispatch from Navigate mode still opens the modal |
 | `client::shell::tests::…::move_workspace_picker_renders_a_modal_listing_targets` | the picker actually renders |
 | `client::shell::tests::…::sidebar_marks_the_active_and_hovered_rows_at_the_left_edge` | left-edge session indicators in the sidebar |
+| `client::shell::tests::…::hovered_row_stays_visible_on_a_theme_with_no_selection_background` | the `selection_bg` fallback applied in the *last* paint pass |
 | `server::client_shell::tests::snapshot_carries_the_explicit_parent_link_as_a_public_workspace_id` | projection emits the public id the client matches |
 | `config::tests::published_profile_keeps_the_move_worktree_binding` | binding survives the endpoint keybind profile round trip |
 
@@ -97,17 +98,20 @@ here; upstream files keep only the hooks.
 | --- | --- |
 | `src/fork_contract.rs` | the hook guards |
 | `src/client/shell/workspace_grouping.rs` | the grouping source of truth |
-| `src/client/shell/overlays/move_workspace.rs` | the move-to-workspace picker: state, keys, submit, render |
+| `src/client/shell/move_workspace.rs` | the move-to-workspace picker: state, keys, submit, render |
 | `src/client/shell/fork_actions.rs` | the acknowledge and move-picker keybind actions, and keyboard reorder |
 | `src/client/shell/sidebar_indicators.rs` | the left-edge active/hovered row markers |
 | `src/app/api/fork_workspace_grouping.rs` | server-side `workspace.reparent` and `workspace.acknowledge` |
 | `src/app/fork_done_markers.rs` | acknowledgement and orphaned-child repair |
 | `src/client/shell/tests/fork_grouping.rs` | grouping, picker, reorder and indicator tests |
 
-`move_workspace.rs` is declared inside `overlays.rs` rather than `shell.rs` so
-`use super::*` reaches that file's private drawing helpers (`popup`, `panel`,
-`put_text`, `button`, `row`, `contrast`) without widening six upstream
-signatures. Keep it there; the alternative reintroduces six conflict points.
+`move_workspace.rs` sits flat in `src/client/shell/` but is **declared inside
+`overlays.rs`**, not `shell.rs`, so `use super::*` reaches that file's private
+drawing helpers (`popup`, `panel`, `put_text`, `button`, `row`, `contrast`)
+without widening six upstream signatures. It stays flat because `overlays.rs` is
+itself loaded via `#[path]` from `render.rs`, and a `#[path]`-loaded module
+resolves its children against its own directory. Keep the declaration where it
+is; moving it to `shell.rs` reintroduces six conflict points.
 
 What deliberately stays in upstream files, and cannot be extracted:
 
@@ -177,7 +181,12 @@ Easy to get wrong when re-porting:
 Left-edge markers in the workspace list: an accent bar (`▎`) spans the
 active workspace and an arrow (`❯`) marks the hovered/navigate-selected
 row. The arrow wins on a row that is both. Originally `72ea88e3`, lost in the
-v0.9.0 sync because it lived in `src/ui/sidebar.rs`, which upstream deleted.
+v0.9.0 sync: it lived in `src/ui/sidebar.rs`, and upstream's `207be3c7`
+("render the shell in the client") moved sidebar *rendering* out of that file
+into `src/client/shell/sidebar.rs`, dropping the markers on the way. The file
+itself still exists and is still live — it supplies row-layout helpers the
+client shell calls — so do not go looking for a deleted file. The port belongs
+in `src/client/shell/sidebar.rs`.
 
 Easy to get wrong when re-porting:
 
@@ -185,9 +194,13 @@ Easy to get wrong when re-porting:
   them. They occupy the row's first cell, which the row template leaves blank.
 - The bar spans every line of a multi-line row; the arrow is only on the first.
 - The original also brightened the hovered row, which upstream now themes via
-  `selection_bg`. That palette entry can be `Color::Reset`, leaving the hovered
-  row invisible, so the port falls back to `surface1` only in that case rather
-  than overriding a theme that sets a colour.
+  `selection_bg`. That palette entry can be `Color::Reset` (the terminal
+  16-color theme), leaving the hovered row invisible, so the port falls back to
+  `surface1` only in that case rather than overriding a theme that sets a colour.
+- That fallback must go in the **last** paint pass. `render_sidebar` tints the
+  row rect, then `render_workspace_rows` repaints every cell of the same rect at
+  the end — so a fallback applied only in the first pass is silently overwritten
+  and the row is unhighlighted again on exactly the themes that need it.
 
 ### Monorepo top-level spaces
 

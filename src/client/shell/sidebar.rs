@@ -310,8 +310,7 @@ pub(crate) fn render_sidebar(
         let selected = state.selected_workspace_id == Some(workspace.workspace_id.as_str());
         let dragged = state.dragged_workspace_id == Some(workspace.workspace_id.as_str());
         if selected {
-            let background = super::super::sidebar_indicators::hovered_row_background(palette);
-            buffer.set_style(rect, Style::default().bg(background));
+            buffer.set_style(rect, Style::default().bg(palette.selection_bg));
         } else if dragged {
             buffer.set_style(rect, Style::default().bg(palette.surface1));
         } else if workspace.focused {
@@ -611,7 +610,9 @@ fn render_workspace_rows(
     }
 
     let background = if selected {
-        Some(palette.selection_bg)
+        Some(super::super::sidebar_indicators::hovered_row_background(
+            palette,
+        ))
     } else if dragged {
         Some(palette.surface1)
     } else if workspace.focused {
